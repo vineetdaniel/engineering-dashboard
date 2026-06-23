@@ -1,7 +1,12 @@
-const BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
+const isServer = typeof window === "undefined";
+const DEFAULT_BASE = isServer
+  ? (process.env.BACKEND_URL || "http://localhost:8000")
+  : (process.env.NEXT_PUBLIC_API_URL || "");
 
 export async function api(path: string, options?: RequestInit) {
-  const res = await fetch(`${BASE}${path}`, options);
+  const base = DEFAULT_BASE;
+  const url = `${base}${path}`;
+  const res = await fetch(url, options);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
