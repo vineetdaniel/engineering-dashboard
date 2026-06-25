@@ -1,5 +1,4 @@
 import datetime as dt
-import os
 from typing import Any, Dict, List
 
 import httpx
@@ -11,65 +10,151 @@ class JiraConnector(Connector):
     name = "jira"
     required_env = ["JIRA_SERVER", "JIRA_USERNAME", "JIRA_API_TOKEN", "JIRA_PROJECT_KEYS"]
 
-    def __init__(self):
-        self.server = os.getenv("JIRA_SERVER", "").rstrip("/")
-        self.username = os.getenv("JIRA_USERNAME", "")
-        self.token = os.getenv("JIRA_API_TOKEN", "")
-        self.project_keys = [k.strip() for k in os.getenv("JIRA_PROJECT_KEYS", "").split(",") if k.strip()]
+    def __init__(self, config: Dict[str, Any] | None = None):
+        self.server = (config.get("JIRA_SERVER", "") if config else "").rstrip("/")
+        self.username = config.get("JIRA_USERNAME", "") if config else ""
+        self.token = config.get("JIRA_API_TOKEN", "") if config else ""
+        project_keys_raw = config.get("JIRA_PROJECT_KEYS", "") if config else ""
+        self.project_keys = [k.strip() for k in str(project_keys_raw).split(",") if k.strip()]
+        # Quote project keys that are JQL reserved words (e.g. IN).
+        self.quoted_project_keys = [f'"{k}"' if self._needs_quoting(k) else k for k in self.project_keys]
         self.auth = (self.username, self.token)
         self.base_url = f"{self.server}/rest/api/3"
+
+    @staticmethod
+    def _needs_quoting(key: str) -> bool:
+        reserved = {"in", "is", "as", "or", "and", "not", "empty", "null", "was", "were", "changed"}
+        return key.lower() in reserved or not key.replace("-", "").isalnum()
 
     async def health_check(self) -> Dict[str, Any]:
         if not all([self.server, self.username, self.token]):
             return {"ok": False, "error": "JIRA_SERVER, JIRA_USERNAME, JIRA_API_TOKEN required"}
         async with httpx.AsyncClient() as client:
-            r = await client.get(f"{self.base_url}/myself", auth=self.auth)
+            r = await self._jira_get(client, f"{self.base_url}/myself")
             if r.status_code == 200:
                 return {"ok": True, "error": None}
             return {"ok": False, "error": f"HTTP {r.status_code}: {r.text}"}
 
+    async def _jira_get(self, client: httpx.AsyncClient, url: str, params: Dict[str, Any] | None = None) -> httpx.Response:
+        """Call a Jira endpoint with Basic auth, falling back to Bearer on 401."""
+        r = await client.get(url, auth=self.auth, params=params)
+        if r.status_code == 401:
+            r = await client.get(url, headers={"Authorization": f"Bearer {self.token}"}, params=params)
+        return r
+
+    async def _jira_search(self, client: httpx.AsyncClient, jql: str, max_results: int = 50, fields: List[str] | None = None) -> httpx.Response:
+        """Call the modern /rest/api/3/search/jql endpoint with auth fallback."""
+        payload: Dict[str, Any] = {"jql": jql, "maxResults": max_results}
+        if fields:
+            payload["fields"] = fields
+        r = await client.post(f"{self.base_url}/search/jql", auth=self.auth, json=payload)
+        if r.status_code == 401:
+            r = await client.post(
+                f"{self.base_url}/search/jql",
+                headers={"Authorization": f"Bearer {self.token}"},
+                json=payload,
+            )
+        return r
+
     async def fetch_metrics(self) -> List[Dict[str, Any]]:
         metrics = []
-        for project in self.project_keys:
+        for project in self.quoted_project_keys:
             metrics.extend(await self._project_metrics(project))
         return metrics
 
     async def fetch_events(self) -> List[Dict[str, Any]]:
         events = []
-        for project in self.project_keys:
+        for project in self.quoted_project_keys:
             events.extend(await self._blocked_tickets(project))
+            events.extend(await self._epic_progress(project))
         return events
 
     async def _project_metrics(self, project: str) -> List[Dict[str, Any]]:
         metrics = []
         async with httpx.AsyncClient() as client:
-            jql = f"project={project} AND statusCategory != Done"
-            r = await client.get(
-                f"{self.base_url}/search",
-                auth=self.auth,
-                params={"jql": jql, "maxResults": 0},
-            )
+            jql = f"project={project} AND resolution = Unresolved"
+            r = await self._jira_search(client, jql, max_results=1)
             r.raise_for_status()
+            data = r.json()
+            total = data.get("total") if "total" in data else len(data.get("issues", []))
             metrics.append({
                 "source": "jira",
                 "metric_type": "open_issues",
                 "entity": project,
-                "value": r.json().get("total", 0),
+                "value": total,
                 "timestamp": dt.datetime.utcnow().isoformat(),
             })
 
-            bug_jql = f"project={project} AND type=Bug AND statusCategory != Done"
-            r = await client.get(
-                f"{self.base_url}/search",
-                auth=self.auth,
-                params={"jql": bug_jql, "maxResults": 0},
-            )
+            bug_jql = f"project={project} AND type=Bug AND resolution = Unresolved"
+            r = await self._jira_search(client, bug_jql, max_results=1)
             r.raise_for_status()
+            data = r.json()
+            total = data.get("total") if "total" in data else len(data.get("issues", []))
             metrics.append({
                 "source": "jira",
                 "metric_type": "open_bugs",
                 "entity": project,
-                "value": r.json().get("total", 0),
+                "value": total,
+                "timestamp": dt.datetime.utcnow().isoformat(),
+            })
+
+            metrics.extend(await self._sprint_metrics(client, project))
+        return metrics
+
+    async def _sprint_metrics(self, client: httpx.AsyncClient, project: str) -> List[Dict[str, Any]]:
+        """Fetch active sprint data from Jira Agile API if available."""
+        metrics: List[Dict[str, Any]] = []
+        boards_url = f"{self.server.rstrip('/')}/rest/agile/1.0/board"
+        r = await self._jira_get(client, boards_url, params={"projectKeyOrId": project})
+        if r.status_code != 200:
+            return metrics
+        boards = r.json().get("values", [])
+        if not boards:
+            return metrics
+        board_id = boards[0].get("id")
+        if not board_id:
+            return metrics
+
+        sprints_url = f"{self.server.rstrip('/')}/rest/agile/1.0/board/{board_id}/sprint"
+        r = await self._jira_get(client, sprints_url, params={"state": "active"})
+        if r.status_code != 200:
+            return metrics
+        sprints = r.json().get("values", [])
+        for sprint in sprints:
+            sprint_id = sprint.get("id")
+            sprint_name = sprint.get("name", "Sprint")
+            issue_url = f"{self.server.rstrip('/')}/rest/agile/1.0/sprint/{sprint_id}/issue"
+            r = await self._jira_get(client, issue_url, params={"fields": "status,customfield_10016"})
+            if r.status_code != 200:
+                continue
+            issues = r.json().get("issues", [])
+            total_points = 0.0
+            remaining_points = 0.0
+            for issue in issues:
+                fields = issue.get("fields", {})
+                points = fields.get("customfield_10016") or 0
+                try:
+                    points = float(points)
+                except Exception:
+                    points = 0
+                total_points += points
+                status_category = (fields.get("status", {}).get("statusCategory", {}).get("key") or "")
+                if status_category != "done":
+                    remaining_points += points
+            metrics.append({
+                "source": "jira",
+                "metric_type": "sprint_velocity",
+                "entity": project,
+                "value": round(total_points, 2),
+                "meta": {"sprint_id": sprint_id, "sprint_name": sprint_name, "completed_points": round(total_points - remaining_points, 2)},
+                "timestamp": dt.datetime.utcnow().isoformat(),
+            })
+            metrics.append({
+                "source": "jira",
+                "metric_type": "sprint_remaining_points",
+                "entity": project,
+                "value": round(remaining_points, 2),
+                "meta": {"sprint_id": sprint_id, "sprint_name": sprint_name, "committed": round(total_points, 2)},
                 "timestamp": dt.datetime.utcnow().isoformat(),
             })
         return metrics
@@ -77,11 +162,12 @@ class JiraConnector(Connector):
     async def _blocked_tickets(self, project: str) -> List[Dict[str, Any]]:
         events = []
         async with httpx.AsyncClient() as client:
-            jql = f"project={project} AND status=Blocked"
-            r = await client.get(
-                f"{self.base_url}/search",
-                auth=self.auth,
-                params={"jql": jql, "fields": "summary,assignee,updated", "maxResults": 50},
+            jql = f"project={project} AND status = Blocked"
+            r = await self._jira_search(
+                client,
+                jql,
+                max_results=50,
+                fields=["summary", "assignee", "updated"],
             )
             r.raise_for_status()
             for issue in r.json().get("issues", []):
@@ -97,6 +183,61 @@ class JiraConnector(Connector):
                         "key": issue["key"],
                         "assignee": fields.get("assignee", {}).get("displayName") if fields.get("assignee") else None,
                         "url": f"{self.server}/browse/{issue['key']}",
+                    },
+                    "happened_at": fields.get("updated", dt.datetime.utcnow().isoformat()),
+                })
+        return events
+
+    async def _epic_progress(self, project: str) -> List[Dict[str, Any]]:
+        events = []
+        async with httpx.AsyncClient() as client:
+            jql = f"project={project} AND type=Epic AND resolution = Unresolved"
+            r = await self._jira_search(
+                client,
+                jql,
+                max_results=20,
+                fields=["summary", "status", "customfield_10016", "updated"],
+            )
+            r.raise_for_status()
+            for issue in r.json().get("issues", []):
+                fields = issue.get("fields", {})
+                # Total story points for issues under this epic.
+                epic_key = issue["key"]
+                total_points = 0.0
+                done_points = 0.0
+                child_jql = f"'Epic Link'={epic_key} OR parent={epic_key}"
+                child_r = await self._jira_search(
+                    client,
+                    child_jql,
+                    max_results=100,
+                    fields=["status", "customfield_10016"],
+                )
+                if child_r.status_code == 200:
+                    for child in child_r.json().get("issues", []):
+                        child_fields = child.get("fields", {})
+                        points = child_fields.get("customfield_10016") or 0
+                        try:
+                            points = float(points)
+                        except Exception:
+                            points = 0
+                        total_points += points
+                        status_category = child_fields.get("status", {}).get("statusCategory", {}).get("key") or ""
+                        if status_category == "done":
+                            done_points += points
+                pct = round((done_points / max(1, total_points)) * 100, 1)
+                events.append({
+                    "source": "jira",
+                    "event_type": "epic_progress",
+                    "entity": project,
+                    "title": f"{epic_key}: {fields.get('summary', '')}",
+                    "severity": "medium",
+                    "status": fields.get("status", {}).get("name", "open"),
+                    "meta": {
+                        "key": epic_key,
+                        "pct": pct,
+                        "total_points": round(total_points, 1),
+                        "done_points": round(done_points, 1),
+                        "url": f"{self.server}/browse/{epic_key}",
                     },
                     "happened_at": fields.get("updated", dt.datetime.utcnow().isoformat()),
                 })

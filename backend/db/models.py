@@ -1,5 +1,5 @@
 import datetime as dt
-from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Text, create_engine
+from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Text, Boolean, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from backend.config import settings
 
@@ -18,6 +18,7 @@ class Metric(Base):
     value_text = Column(Text, nullable=True)
     meta = Column(JSON, default=dict)
     timestamp = Column(DateTime, default=dt.datetime.utcnow, index=True)
+    is_seed = Column(Boolean, default=False, nullable=False, index=True)
 
 
 class Event(Base):
@@ -31,6 +32,15 @@ class Event(Base):
     status = Column(String(50), nullable=True)
     meta = Column(JSON, default=dict)
     happened_at = Column(DateTime, default=dt.datetime.utcnow, index=True)
+    is_seed = Column(Boolean, default=False, nullable=False, index=True)
+
+
+class ConnectorConfig(Base):
+    __tablename__ = "connector_configs"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True, nullable=False, index=True)
+    config = Column(JSON, default=dict, nullable=False)
+    updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)
 
 
 def init_db():
