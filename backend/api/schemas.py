@@ -52,6 +52,7 @@ class DeveloperProductivity(BaseModel):
     jira_done_points: float = 0
     jira_open_points: float = 0
     jira_open_issues: int = 0
+    jira_done_issues: int = 0
     matched: bool = True  # False = a connector identity with no planning resource
 
 

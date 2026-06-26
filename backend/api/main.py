@@ -1187,11 +1187,15 @@ async def productivity_developers(
         SELECT meta->>'assignee_login' AS account_id,
                MAX(meta->>'assignee_name') AS dev,
                COALESCE(SUM(CASE WHEN metric_type='sprint_points_per_developer'
-                                 THEN (meta->>'completed_points')::float END), 0) AS done_pts,
+                                 THEN (meta->>'completed_points')::float END), 0) AS sprint_done_pts,
                COALESCE(MAX(CASE WHEN metric_type='developer_open_story_points'
                                  THEN value END), 0) AS open_pts,
                COALESCE(SUM(CASE WHEN metric_type='developer_open_story_points'
-                                 THEN (meta->>'issue_count')::int END), 0)::int AS open_issues
+                                 THEN (meta->>'issue_count')::int END), 0)::int AS open_issues,
+               COALESCE(MAX(CASE WHEN metric_type='developer_open_story_points'
+                                 THEN (meta->>'done_count')::int END), 0)::int AS done_issues,
+               COALESCE(MAX(CASE WHEN metric_type='developer_open_story_points'
+                                 THEN (meta->>'done_points')::float END), 0) AS done_pts
         FROM metrics
         WHERE source = 'jira'
           AND metric_type IN ('sprint_points_per_developer', 'developer_open_story_points')
@@ -1199,7 +1203,12 @@ async def productivity_developers(
         GROUP BY meta->>'assignee_login'
     """)).mappings().all()
     jira_by_account: dict[str, dict] = {
-        r["account_id"]: {"done": float(r["done_pts"] or 0), "open": float(r["open_pts"] or 0), "open_issues": int(r["open_issues"] or 0)}
+        r["account_id"]: {
+            "done": float(r["sprint_done_pts"] or 0) + float(r["done_pts"] or 0),
+            "open": float(r["open_pts"] or 0),
+            "open_issues": int(r["open_issues"] or 0),
+            "done_issues": int(r["done_issues"] or 0),
+        }
         for r in jira_rows
     }
     jira_by_name: dict[str, dict] = {
@@ -1271,6 +1280,7 @@ async def productivity_developers(
             jira_done_points=jira["done"],
             jira_open_points=jira["open"],
             jira_open_issues=jira.get("open_issues", 0),
+            jira_done_issues=jira.get("done_issues", 0),
             matched=True,
         ))
 
@@ -1287,12 +1297,13 @@ async def productivity_developers(
         if login:
             seen_unmatched_login.add(login)
         if key and key not in consumed_commit_name:
-            jira = jira_by_name.get(key, {"done": 0.0, "open": 0.0, "open_issues": 0})
+            jira = jira_by_name.get(key, {"done": 0.0, "open": 0.0, "open_issues": 0, "done_issues": 0})
             consumed_jira_name.add(key)
             unmatched.append(schemas.DeveloperProductivity(
                 name=r["dev"], commits=r["commits"],
                 jira_done_points=jira["done"], jira_open_points=jira["open"],
                 jira_open_issues=jira.get("open_issues", 0),
+                jira_done_issues=jira.get("done_issues", 0),
                 matched=False,
             ))
     for r in jira_rows:
@@ -1301,11 +1312,13 @@ async def productivity_developers(
         key = _norm_name(r["dev"])
         if key and key not in consumed_jira_name:
             consumed_jira_name.add(key)
+            jira = jira_by_account.get(r["account_id"], {"done": 0.0, "open": 0.0, "open_issues": 0, "done_issues": 0})
             unmatched.append(schemas.DeveloperProductivity(
                 name=r["dev"],
-                jira_done_points=float(r["done_pts"] or 0),
-                jira_open_points=float(r["open_pts"] or 0),
-                jira_open_issues=int(r["open_issues"] or 0),
+                jira_done_points=jira["done"],
+                jira_open_points=jira["open"],
+                jira_open_issues=jira.get("open_issues", 0),
+                jira_done_issues=jira.get("done_issues", 0),
                 matched=False,
             ))
 

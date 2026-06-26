@@ -196,7 +196,7 @@ export function ProductivityClient({
                 <th className="px-4 py-2 text-right">Jira open</th>
                 <th className="px-4 py-2 text-right">Done %</th>
                 <th className="px-4 py-2 text-right">SP/eff hr</th>
-                <th className="px-4 py-2 text-right">Jira done SP</th>
+                <th className="px-4 py-2 text-right">Jira done</th>
                 <th className="px-4 py-2">Mix</th>
               </tr>
             </thead>
@@ -291,7 +291,14 @@ function DevRow({ d }: { d: DeveloperProductivity }) {
       </td>
       <td className="px-4 py-2 text-right">{d.completion_pct}%</td>
       <td className="px-4 py-2 text-right">{d.sp_per_effective_hour ?? "—"}</td>
-      <td className="px-4 py-2 text-right text-muted-foreground">{d.jira_done_points || "—"}</td>
+      <td className="px-4 py-2 text-right text-muted-foreground">
+        {d.jira_done_issues > 0 ? (
+          <span className="text-emerald-600 dark:text-emerald-400">
+            {d.jira_done_issues}
+            {d.jira_done_points > 0 && <span className="ml-1 text-xs text-muted-foreground">({d.jira_done_points} SP)</span>}
+          </span>
+        ) : "—"}
+      </td>
       <td className="px-4 py-2">
         <span className="flex flex-wrap gap-1">
           {mix.length === 0 ? (

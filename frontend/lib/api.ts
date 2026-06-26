@@ -84,6 +84,7 @@ export interface DeveloperProductivity {
   jira_done_points: number;
   jira_open_points: number;
   jira_open_issues: number;
+  jira_done_issues: number;
   matched: boolean;
 }
 

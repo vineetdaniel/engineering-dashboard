@@ -182,7 +182,7 @@ class JiraConnector(Connector):
         return metrics
 
     async def _sprint_developer_points(self, project: str) -> List[Dict[str, Any]]:
-        """Return per-developer story-point totals for each active sprint."""
+        """Return per-developer story-point totals for active + last 3 closed sprints."""
         metrics: List[Dict[str, Any]] = []
         async with httpx.AsyncClient() as client:
             boards_url = f"{self.server.rstrip('/')}/rest/agile/1.0/board"
@@ -197,10 +197,18 @@ class JiraConnector(Connector):
                 return metrics
 
             sprints_url = f"{self.server.rstrip('/')}/rest/agile/1.0/board/{board_id}/sprint"
-            r = await self._jira_get(client, sprints_url, params={"state": "active"})
-            if r.status_code != 200:
-                return metrics
-            sprints = r.json().get("values", [])
+
+            # Fetch active + last 3 closed sprints
+            sprints: List[Dict[str, Any]] = []
+            for state in ("active", "closed"):
+                r = await self._jira_get(client, sprints_url, params={"state": state})
+                if r.status_code != 200:
+                    continue
+                values = r.json().get("values", [])
+                if state == "closed":
+                    values = sorted(values, key=lambda s: s.get("id", 0), reverse=True)[:3]
+                sprints.extend(values)
+
             for sprint in sprints:
                 sprint_id = sprint.get("id")
                 sprint_name = sprint.get("name", "Sprint")
@@ -210,7 +218,9 @@ class JiraConnector(Connector):
                 if r.status_code != 200:
                     continue
                 issues = r.json().get("issues", [])
-                by_assignee: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"points": 0.0, "completed_points": 0.0, "name": None})
+                by_assignee: Dict[str, Dict[str, Any]] = defaultdict(
+                    lambda: {"points": 0.0, "completed_points": 0.0, "done_count": 0, "name": None}
+                )
                 for issue in issues:
                     issue_fields = issue.get("fields", {})
                     points = self._points(issue_fields)
@@ -222,6 +232,7 @@ class JiraConnector(Connector):
                     status_category = (issue_fields.get("status", {}).get("statusCategory", {}).get("key") or "")
                     if status_category == "done":
                         by_assignee[login]["completed_points"] += points
+                        by_assignee[login]["done_count"] += 1
                 for login, agg in by_assignee.items():
                     metrics.append({
                         "source": "jira",
@@ -235,45 +246,61 @@ class JiraConnector(Connector):
                             "assignee_login": login,
                             "assignee_name": agg["name"],
                             "completed_points": round(agg["completed_points"], 2),
+                            "done_count": agg["done_count"],
                         },
                         "timestamp": dt.datetime.utcnow().isoformat(),
                     })
         return metrics
 
     async def _developer_open_story_points(self, project: str) -> List[Dict[str, Any]]:
-        """Return unresolved story points grouped by assignee for a project."""
+        """Return open and done issue counts + story points grouped by assignee."""
         metrics: List[Dict[str, Any]] = []
-        jql = f"project={project} AND resolution = Unresolved AND assignee is not EMPTY"
         async with httpx.AsyncClient() as client:
-            r = await self._jira_search(
-                client,
-                jql,
-                max_results=200,
-                fields=["assignee", self.story_points_field],
+            # Open (unresolved) issues
+            open_jql = f"project={project} AND resolution = Unresolved AND assignee is not EMPTY"
+            r_open = await self._jira_search(client, open_jql, max_results=200, fields=["assignee", self.story_points_field])
+
+            # Done issues in the last 90 days
+            done_jql = f"project={project} AND statusCategory = Done AND assignee is not EMPTY AND updated >= -90d"
+            r_done = await self._jira_search(client, done_jql, max_results=500, fields=["assignee", self.story_points_field])
+
+            by_assignee: Dict[str, Dict[str, Any]] = defaultdict(
+                lambda: {"open_points": 0.0, "open_count": 0, "done_points": 0.0, "done_count": 0, "name": None}
             )
-            if r.status_code != 200:
-                return metrics
-            by_assignee: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"points": 0.0, "count": 0, "name": None})
-            for issue in r.json().get("issues", []):
-                issue_fields = issue.get("fields", {})
-                points = self._points(issue_fields)
-                login, name = self._assignee(issue_fields)
-                if not login:
-                    continue
-                by_assignee[login]["name"] = name or login
-                by_assignee[login]["points"] += points
-                by_assignee[login]["count"] += 1
+
+            if r_open.status_code == 200:
+                for issue in r_open.json().get("issues", []):
+                    issue_fields = issue.get("fields", {})
+                    login, name = self._assignee(issue_fields)
+                    if not login:
+                        continue
+                    by_assignee[login]["name"] = name or login
+                    by_assignee[login]["open_points"] += self._points(issue_fields)
+                    by_assignee[login]["open_count"] += 1
+
+            if r_done.status_code == 200:
+                for issue in r_done.json().get("issues", []):
+                    issue_fields = issue.get("fields", {})
+                    login, name = self._assignee(issue_fields)
+                    if not login:
+                        continue
+                    by_assignee[login]["name"] = name or login
+                    by_assignee[login]["done_points"] += self._points(issue_fields)
+                    by_assignee[login]["done_count"] += 1
+
             for login, agg in by_assignee.items():
                 metrics.append({
                     "source": "jira",
                     "metric_type": "developer_open_story_points",
                     "entity": project,
-                    "value": round(agg["points"], 2),
+                    "value": round(agg["open_points"], 2),
                     "meta": {
                         "project": project,
                         "assignee_login": login,
                         "assignee_name": agg["name"],
-                        "issue_count": agg["count"],
+                        "issue_count": agg["open_count"],
+                        "done_count": agg["done_count"],
+                        "done_points": round(agg["done_points"], 2),
                     },
                     "timestamp": dt.datetime.utcnow().isoformat(),
                 })
