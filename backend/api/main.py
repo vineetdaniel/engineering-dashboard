@@ -1144,7 +1144,7 @@ async def productivity_developers(
     plan_where = " AND ".join(plan_filters)
 
     plan_rows = db.execute(text(f"""
-        SELECT r.id AS resource_id, r.name, r.team, r.role, r.github_handle,
+        SELECT r.id AS resource_id, r.name, r.team, r.role, r.github_handle, r.jira_account_id,
                COALESCE(SUM(a.story_points), 0)::float AS allocated_sp,
                COALESCE(SUM(a.effective_hours), 0)::float AS effective_hours,
                COUNT(t.id)::int AS total_tasks,
@@ -1156,7 +1156,7 @@ async def productivity_developers(
         LEFT JOIN sprint_allocations a ON a.resource_id = r.id
         LEFT JOIN allocation_tasks t ON t.allocation_id = a.id
         WHERE {plan_where}
-        GROUP BY r.id, r.name, r.team, r.role, r.github_handle
+        GROUP BY r.id, r.name, r.team, r.role, r.github_handle, r.jira_account_id
         ORDER BY r.name
     """), plan_params).mappings().all()
 
