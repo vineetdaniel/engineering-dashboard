@@ -27,7 +27,7 @@ const TYPE_COLORS: Record<string, string> = {
   Unknown:  "bg-gray-400",
 };
 
-const STATUS_ORDER = ["To Do", "In Progress", "In Review", "QA", "Done"];
+const STATUS_ORDER = ["To Do", "In Progress", "Dev Done", "Peer Review", "In QA", "QA", "Ready for Release", "Done"];
 
 function getColor(type: string) {
   return TYPE_COLORS[type] ?? "bg-gray-400";
