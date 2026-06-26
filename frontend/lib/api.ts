@@ -67,3 +67,78 @@ export const getMetrics = (filters?: ApiFilters, metric_type?: string) =>
 
 export const getEvents = (filters?: ApiFilters, event_type?: string) =>
   api(`/events?${buildParams(filters, event_type ? { event_type } : undefined)}`);
+
+export interface DeveloperProductivity {
+  resource_id: number | null;
+  name: string;
+  team: string | null;
+  role: string | null;
+  allocated_story_points: number;
+  effective_hours: number;
+  total_tasks: number;
+  done_tasks: number;
+  completion_pct: number;
+  sp_per_effective_hour: number | null;
+  category_mix: Record<string, number>;
+  commits: number;
+  jira_done_points: number;
+  jira_open_points: number;
+  jira_open_issues: number;
+  matched: boolean;
+}
+
+export interface ProductivitySummary {
+  developers: DeveloperProductivity[];
+  unmatched: DeveloperProductivity[];
+  total_commits: number;
+  total_allocated_points: number;
+  total_done_tasks: number;
+  total_tasks: number;
+  avg_completion_pct: number;
+  active_developers: number;
+}
+
+export interface ProductivityTrend {
+  metric: string;
+  points: { label: string; value: number }[];
+}
+
+export const getDeveloperProductivity = (opts?: {
+  dateRange?: ApiFilters["dateRange"];
+  sprint_id?: number;
+  team?: string;
+}): Promise<ProductivitySummary> => {
+  const params = new URLSearchParams();
+  if (opts?.dateRange) params.set("dateRange", opts.dateRange);
+  if (opts?.sprint_id != null) params.set("sprint_id", String(opts.sprint_id));
+  if (opts?.team && opts.team !== "all") params.set("team", opts.team);
+  return api(`/productivity/developers?${params.toString()}`);
+};
+
+export const getProductivityTrends = (
+  metric: "commits" | "velocity",
+  dateRange?: ApiFilters["dateRange"]
+): Promise<ProductivityTrend> => {
+  const params = new URLSearchParams({ metric });
+  if (dateRange) params.set("dateRange", dateRange);
+  return api(`/productivity/trends?${params.toString()}`);
+};
+
+export interface GitHubLogin {
+  login: string;
+  display_name: string;
+  commits: number;
+}
+
+export const getGitHubLogins = (): Promise<GitHubLogin[]> =>
+  api("/productivity/github-logins");
+
+export interface JiraAssignee {
+  account_id: string;
+  display_name: string;
+  open_issues: number;
+  open_sp: number;
+}
+
+export const getJiraAssignees = (): Promise<JiraAssignee[]> =>
+  api("/productivity/jira-assignees");

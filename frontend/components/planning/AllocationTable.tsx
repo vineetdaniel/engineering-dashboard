@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { InlineEdit } from "./InlineEdit";
 import { TaskPanel } from "./TaskPanel";
@@ -86,8 +86,8 @@ export function AllocationTable({
                     {teamAllocations.map((a) => {
                       const isExpanded = expanded.has(a.id);
                       return (
-                        <>
-                          <tr key={a.id} className="hover:bg-muted/30">
+                        <Fragment key={a.id}>
+                          <tr className="hover:bg-muted/30">
                             <td className="px-3 py-2">
                               <button
                                 onClick={() => toggleExpand(a.id)}
@@ -193,7 +193,7 @@ export function AllocationTable({
                             </td>
                           </tr>
                           {isExpanded && (
-                            <tr key={`${a.id}-panel`}>
+                            <tr>
                               <td colSpan={8} className="bg-muted/20 px-3 py-3">
                                 <TaskPanel
                                   allocationId={a.id}
@@ -205,7 +205,7 @@ export function AllocationTable({
                               </td>
                             </tr>
                           )}
-                        </>
+                        </Fragment>
                       );
                     })}
                   </tbody>

@@ -127,6 +127,22 @@ function matchKnownTeam(name: string): string | null {
   return _TEAM_CANONICAL[_teamKey(name)] ?? null;
 }
 
+/**
+ * Derive a sprint name + dates from the uploaded file name as a fallback when
+ * the sheet has no usable title row. The file name often carries both, e.g.
+ * "Resource Allocation 29th May to 11th June.xlsx".
+ */
+function nameFromFile(fileName?: string): {
+  name: string;
+  start_date: string | null;
+  end_date: string | null;
+} {
+  if (!fileName) return { name: "", start_date: null, end_date: null };
+  const base = fileName.replace(/\.[^.]+$/, "").trim(); // drop extension
+  const parsed = parseDateRange(base);
+  return { name: base, start_date: parsed.start_date, end_date: parsed.end_date };
+}
+
 function detectCategory(title: string): TaskCategory {
   const lower = title.toLowerCase();
   if (
@@ -188,7 +204,10 @@ export function detectFileType(workbook: XLSX.WorkBook): PlanningFileType {
  * Parse a Resource Allocation capacity file (team → resource → SP/hours/leaves).
  * Throws FileTypeMismatchError if the file structurally looks like a sprint plan.
  */
-export function parseAllocationFile(buffer: ArrayBuffer): ParsedAllocation {
+export function parseAllocationFile(
+  buffer: ArrayBuffer,
+  fileName?: string
+): ParsedAllocation {
   const workbook = XLSX.read(buffer, { type: "array" });
   const detected = detectFileType(workbook);
   if (detected === "sprint") {
@@ -210,19 +229,35 @@ export function parseAllocationFile(buffer: ArrayBuffer): ParsedAllocation {
 
   const data1 = sheetRows(workbook, 0);
 
-  // Sprint name and dates from first non-empty cell of row 1
-  let sprintName = "Imported sprint";
+  // Sprint name + dates from the first non-empty cell of row 1 — but ONLY when
+  // that cell is a genuine title row, not the column-header row. A file that
+  // starts directly with "Name | Story Points | ..." has no title, so we leave
+  // the name blank and let the caller auto-suggest "Sprint-<start>-<end>".
+  let sprintName = "";
   let startDate: string | null = null;
   let endDate: string | null = null;
   if (data1.length > 0) {
     const firstRow = data1[0];
     const firstNonEmpty = firstRow.find((cell) => cell != null && String(cell).trim() !== "");
-    if (firstNonEmpty) {
-      const parsed = parseDateRange(String(firstNonEmpty));
+    const firstStr = firstNonEmpty != null ? String(firstNonEmpty).trim() : "";
+    // Header-label cells ("Name", "Story Points", "Standard Hour", "Leaves")
+    // are NOT a title.
+    const looksLikeHeader = /^(name|story\s*points?|standard\s*hour|leaves?)/i.test(firstStr);
+    if (firstStr && !looksLikeHeader) {
+      const parsed = parseDateRange(firstStr);
       sprintName = parsed.name;
       startDate = parsed.start_date;
       endDate = parsed.end_date;
     }
+  }
+
+  // Fallback: when the sheet has no usable title, derive name/dates from the
+  // uploaded file name (e.g. "Resource Allocation 29th May to 11th June.xlsx").
+  if (!sprintName.trim() || (!startDate && !endDate)) {
+    const fromFile = nameFromFile(fileName);
+    if (!sprintName.trim() && fromFile.name) sprintName = fromFile.name;
+    if (!startDate && fromFile.start_date) startDate = fromFile.start_date;
+    if (!endDate && fromFile.end_date) endDate = fromFile.end_date;
   }
 
   const resources: ParsedResource[] = [];
@@ -430,7 +465,10 @@ function parseAllocationTasks(
  * Throws FileTypeMismatchError if the file structurally looks like an
  * allocation capacity sheet.
  */
-export function parseSprintFile(buffer: ArrayBuffer): ParsedSprintPlan {
+export function parseSprintFile(
+  buffer: ArrayBuffer,
+  fileName?: string
+): ParsedSprintPlan {
   const workbook = XLSX.read(buffer, { type: "array" });
   const detected = detectFileType(workbook);
   if (detected === "allocation") {
@@ -438,12 +476,12 @@ export function parseSprintFile(buffer: ArrayBuffer): ParsedSprintPlan {
   }
 
   const warnings: string[] = [];
-  let sprintName = "Imported sprint";
+  let sprintName = "";
   let startDate: string | null = null;
   let endDate: string | null = null;
 
   // Sprint name + date range: the first non-empty cell anywhere in the first
-  // two rows of the first sheet that contains a date range, else the first
+  // few rows of the first sheet that contains a date range, else the first
   // non-empty cell.
   const firstSheet = sheetRows(workbook, 0);
   outer: for (let i = 0; i < Math.min(firstSheet.length, 3); i++) {
@@ -457,8 +495,16 @@ export function parseSprintFile(buffer: ArrayBuffer): ParsedSprintPlan {
         endDate = parsed.end_date;
         break outer;
       }
-      if (sprintName === "Imported sprint") sprintName = str;
+      if (!sprintName) sprintName = str;
     }
+  }
+
+  // Fallback to the uploaded file name for name/dates when the sheet lacks them.
+  if (!sprintName.trim() || (!startDate && !endDate)) {
+    const fromFile = nameFromFile(fileName);
+    if (!sprintName.trim() && fromFile.name) sprintName = fromFile.name;
+    if (!startDate && fromFile.start_date) startDate = fromFile.start_date;
+    if (!endDate && fromFile.end_date) endDate = fromFile.end_date;
   }
 
   // Locate the task table header across all sheets.

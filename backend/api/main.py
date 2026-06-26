@@ -121,14 +121,17 @@ async def app_settings(db: Session = Depends(get_db)):
 
 @app.get("/connectors/health", response_model=schemas.ConnectorHealthResponse)
 async def connectors_health(db: Session = Depends(get_db)):
-    results = {}
-    for name, cls in CONNECTORS.items():
+    async def check_one(name: str):
         try:
             conn = _connector_with_config(name, db)
-            results[name] = await conn.health_check()
+            return name, await asyncio.wait_for(conn.health_check(), timeout=8.0)
+        except asyncio.TimeoutError:
+            return name, {"ok": False, "error": "timed out"}
         except Exception as exc:
-            results[name] = {"ok": False, "error": str(exc)}
-    return {"connectors": results}
+            return name, {"ok": False, "error": str(exc)}
+
+    pairs = await asyncio.gather(*[check_one(name) for name in CONNECTORS])
+    return {"connectors": dict(pairs)}
 
 
 @app.get("/settings/connectors", response_model=list[schemas.ConnectorConfigOut])
@@ -1092,6 +1095,314 @@ async def list_metrics(
     if environment and environment != "all":
         q = q.filter(Metric.meta.cast(JSONB).op("@>")({"environment": environment}))
     return q.order_by(Metric.timestamp.desc()).all()
+
+
+def _norm_name(name: str | None) -> str:
+    """Normalize a developer name for fuzzy cross-source matching."""
+    if not name:
+        return ""
+    return " ".join(str(name).strip().lower().split())
+
+
+def _match_keys(name: str | None) -> list[str]:
+    """Ordered candidate keys for fuzzy matching a name across sources: the full
+    normalized name first, then the first token (first name). Lets "Avinash"
+    (commit author) match "Avinash Kumar" (planning resource) without
+    false-joining unrelated people on a shared surname. Order matters so an
+    exact full-name match always wins over a first-name match."""
+    norm = _norm_name(name)
+    if not norm:
+        return []
+    keys = [norm]
+    first = norm.split(" ", 1)[0]
+    if len(first) >= 3 and first != norm:  # avoid matching on tiny tokens
+        keys.append(first)
+    return keys
+
+
+@app.get("/productivity/developers", response_model=schemas.ProductivitySummary)
+async def productivity_developers(
+    dateRange: str | None = Query(None, description="24h, 7d, 30d, 90d"),
+    sprint_id: int | None = Query(None),
+    team: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Per-developer productivity rollup. Aggregation happens in SQL (scales as
+    `metrics` grows); planning and connector signals are merged by fuzzy name.
+    Connector identities with no planning resource land in `unmatched`."""
+    window = parse_window(dateRange)
+
+    # --- Planning side: resources + allocations + tasks (SQL aggregation) ---
+    plan_params: dict[str, Any] = {}
+    plan_filters = ["r.is_active = true"]
+    if sprint_id is not None:
+        plan_filters.append("a.sprint_id = :sprint_id")
+        plan_params["sprint_id"] = sprint_id
+    if team and team != "all":
+        plan_filters.append("r.team = :team")
+        plan_params["team"] = team
+    plan_where = " AND ".join(plan_filters)
+
+    plan_rows = db.execute(text(f"""
+        SELECT r.id AS resource_id, r.name, r.team, r.role, r.github_handle,
+               COALESCE(SUM(a.story_points), 0)::float AS allocated_sp,
+               COALESCE(SUM(a.effective_hours), 0)::float AS effective_hours,
+               COUNT(t.id)::int AS total_tasks,
+               COUNT(t.id) FILTER (WHERE t.status = 'done')::int AS done_tasks,
+               COUNT(t.id) FILTER (WHERE t.category = 'product')::int AS cat_product,
+               COUNT(t.id) FILTER (WHERE t.category = 'integration')::int AS cat_integration,
+               COUNT(t.id) FILTER (WHERE t.category = 'other')::int AS cat_other
+        FROM resources r
+        LEFT JOIN sprint_allocations a ON a.resource_id = r.id
+        LEFT JOIN allocation_tasks t ON t.allocation_id = a.id
+        WHERE {plan_where}
+        GROUP BY r.id, r.name, r.team, r.role, r.github_handle
+        ORDER BY r.name
+    """), plan_params).mappings().all()
+
+    # --- GitHub commits per author (SQL GROUP BY meta->>'author_name') ---
+    commit_params: dict[str, Any] = {}
+    commit_where = ["source = 'github'", "metric_type = 'commit'"]
+    if window is not None:
+        commit_where.append("timestamp >= :win")
+        commit_params["win"] = window
+    commit_rows = db.execute(text(f"""
+        SELECT meta->>'author_name' AS dev,
+               LOWER(TRIM(meta->>'author_login')) AS login,
+               COUNT(*)::int AS commits
+        FROM metrics
+        WHERE {' AND '.join(commit_where)} AND meta->>'author_name' IS NOT NULL
+        GROUP BY meta->>'author_name', meta->>'author_login'
+    """), commit_params).mappings().all()
+    # Two lookup tables: by GitHub login (exact) and by normalized display name (fuzzy).
+    commits_by_login: dict[str, int] = {}
+    commits_by_name: dict[str, int] = {}
+    for r in commit_rows:
+        if r["login"]:
+            commits_by_login[r["login"]] = commits_by_login.get(r["login"], 0) + r["commits"]
+        commits_by_name[_norm_name(r["dev"])] = commits_by_name.get(_norm_name(r["dev"]), 0) + r["commits"]
+
+    # --- Jira points + open issues per assignee ---
+    jira_rows = db.execute(text("""
+        SELECT meta->>'assignee_login' AS account_id,
+               MAX(meta->>'assignee_name') AS dev,
+               COALESCE(SUM(CASE WHEN metric_type='sprint_points_per_developer'
+                                 THEN (meta->>'completed_points')::float END), 0) AS done_pts,
+               COALESCE(MAX(CASE WHEN metric_type='developer_open_story_points'
+                                 THEN value END), 0) AS open_pts,
+               COALESCE(SUM(CASE WHEN metric_type='developer_open_story_points'
+                                 THEN (meta->>'issue_count')::int END), 0)::int AS open_issues
+        FROM metrics
+        WHERE source = 'jira'
+          AND metric_type IN ('sprint_points_per_developer', 'developer_open_story_points')
+          AND meta->>'assignee_login' IS NOT NULL
+        GROUP BY meta->>'assignee_login'
+    """)).mappings().all()
+    jira_by_account: dict[str, dict] = {
+        r["account_id"]: {"done": float(r["done_pts"] or 0), "open": float(r["open_pts"] or 0), "open_issues": int(r["open_issues"] or 0)}
+        for r in jira_rows
+    }
+    jira_by_name: dict[str, dict] = {
+        _norm_name(r["dev"]): jira_by_account[r["account_id"]]
+        for r in jira_rows if r["dev"]
+    }
+
+    # --- Merge planning + connector signals ---
+    # Commits: prefer exact github_handle match; fall back to fuzzy display-name match.
+    # Jira: prefer exact jira_account_id match; fall back to fuzzy display-name match.
+    def claim(table: dict[str, Any], consumed: set[str], name: str) -> Any:
+        for key in _match_keys(name):
+            if key in table and key not in consumed:
+                consumed.add(key)
+                return table[key]
+        return None
+
+    consumed_commit_login: set[str] = set()
+    consumed_commit_name: set[str] = set()
+    consumed_jira_account: set[str] = set()
+    consumed_jira_name: set[str] = set()
+    developers: list[schemas.DeveloperProductivity] = []
+
+    for row in plan_rows:
+        # --- commits ---
+        handle = (row["github_handle"] or "").strip().lower()
+        if handle and handle in commits_by_login and handle not in consumed_commit_login:
+            commits = commits_by_login[handle]
+            consumed_commit_login.add(handle)
+            for r in commit_rows:
+                if (r["login"] or "") == handle:
+                    consumed_commit_name.add(_norm_name(r["dev"]))
+        else:
+            commits = claim(commits_by_name, consumed_commit_name, row["name"]) or 0
+
+        # --- jira ---
+        jira_id = (row["jira_account_id"] or "").strip()
+        if jira_id and jira_id in jira_by_account and jira_id not in consumed_jira_account:
+            jira = jira_by_account[jira_id]
+            consumed_jira_account.add(jira_id)
+            # mark name consumed so unmatched pass skips it
+            for r in jira_rows:
+                if r["account_id"] == jira_id and r["dev"]:
+                    consumed_jira_name.add(_norm_name(r["dev"]))
+        else:
+            jira = claim(jira_by_name, consumed_jira_name, row["name"]) or {"done": 0.0, "open": 0.0, "open_issues": 0}
+
+        total = row["total_tasks"]
+        done = row["done_tasks"]
+        eff = float(row["effective_hours"] or 0)
+        alloc_sp = float(row["allocated_sp"] or 0)
+        developers.append(schemas.DeveloperProductivity(
+            resource_id=row["resource_id"],
+            name=row["name"],
+            team=row["team"],
+            role=row["role"],
+            allocated_story_points=alloc_sp,
+            effective_hours=eff,
+            total_tasks=total,
+            done_tasks=done,
+            completion_pct=round(done / total * 100, 1) if total else 0,
+            sp_per_effective_hour=round(alloc_sp / eff, 3) if eff > 0 else None,
+            category_mix={
+                "product": row["cat_product"],
+                "integration": row["cat_integration"],
+                "other": row["cat_other"],
+            },
+            commits=commits,
+            jira_done_points=jira["done"],
+            jira_open_points=jira["open"],
+            jira_open_issues=jira.get("open_issues", 0),
+            matched=True,
+        ))
+
+    # --- Unmatched connector identities (not claimed by any planning resource) ---
+    unmatched: list[schemas.DeveloperProductivity] = []
+    seen_unmatched_login: set[str] = set()
+    for r in commit_rows:
+        login = (r["login"] or "").strip().lower()
+        if login and login in consumed_commit_login:
+            continue
+        key = _norm_name(r["dev"])
+        if login and login in seen_unmatched_login:
+            continue
+        if login:
+            seen_unmatched_login.add(login)
+        if key and key not in consumed_commit_name:
+            jira = jira_by_name.get(key, {"done": 0.0, "open": 0.0, "open_issues": 0})
+            consumed_jira_name.add(key)
+            unmatched.append(schemas.DeveloperProductivity(
+                name=r["dev"], commits=r["commits"],
+                jira_done_points=jira["done"], jira_open_points=jira["open"],
+                jira_open_issues=jira.get("open_issues", 0),
+                matched=False,
+            ))
+    for r in jira_rows:
+        if r["account_id"] in consumed_jira_account:
+            continue
+        key = _norm_name(r["dev"])
+        if key and key not in consumed_jira_name:
+            consumed_jira_name.add(key)
+            unmatched.append(schemas.DeveloperProductivity(
+                name=r["dev"],
+                jira_done_points=float(r["done_pts"] or 0),
+                jira_open_points=float(r["open_pts"] or 0),
+                jira_open_issues=int(r["open_issues"] or 0),
+                matched=False,
+            ))
+
+    total_tasks = sum(d.total_tasks for d in developers)
+    total_done = sum(d.done_tasks for d in developers)
+    with_tasks = [d for d in developers if d.total_tasks > 0]
+    avg_completion = round(sum(d.completion_pct for d in with_tasks) / len(with_tasks), 1) if with_tasks else 0
+
+    return schemas.ProductivitySummary(
+        developers=developers,
+        unmatched=unmatched,
+        total_commits=sum(d.commits for d in developers),
+        total_allocated_points=round(sum(d.allocated_story_points for d in developers), 2),
+        total_done_tasks=total_done,
+        total_tasks=total_tasks,
+        avg_completion_pct=avg_completion,
+        active_developers=len([d for d in developers if d.commits or d.total_tasks]),
+    )
+
+
+@app.get("/productivity/github-logins")
+async def github_logins(db: Session = Depends(get_db)):
+    """Distinct GitHub logins from commit metrics, with commit count and display name.
+    Used to populate the handle-mapping dropdown on the Resources page."""
+    rows = db.execute(text("""
+        SELECT LOWER(TRIM(meta->>'author_login')) AS login,
+               MAX(meta->>'author_name') AS display_name,
+               COUNT(*)::int AS commits
+        FROM metrics
+        WHERE source = 'github'
+          AND metric_type = 'commit'
+          AND meta->>'author_login' IS NOT NULL
+          AND TRIM(meta->>'author_login') <> ''
+          AND meta->>'author_login' NOT LIKE '%[bot]%'
+        GROUP BY LOWER(TRIM(meta->>'author_login'))
+        ORDER BY commits DESC
+    """)).mappings().all()
+    return [{"login": r["login"], "display_name": r["display_name"], "commits": r["commits"]} for r in rows]
+
+
+@app.get("/productivity/jira-assignees")
+async def jira_assignees(db: Session = Depends(get_db)):
+    """Distinct Jira assignees from metrics, with account_id, display name, open issue count."""
+    rows = db.execute(text("""
+        SELECT meta->>'assignee_login' AS account_id,
+               MAX(meta->>'assignee_name') AS display_name,
+               COALESCE(SUM((meta->>'issue_count')::int), 0)::int AS open_issues,
+               COALESCE(SUM(value), 0)::float AS open_sp
+        FROM metrics
+        WHERE source = 'jira'
+          AND metric_type = 'developer_open_story_points'
+          AND meta->>'assignee_login' IS NOT NULL
+          AND TRIM(meta->>'assignee_login') <> ''
+        GROUP BY meta->>'assignee_login'
+        ORDER BY open_issues DESC
+    """)).mappings().all()
+    return [
+        {"account_id": r["account_id"], "display_name": r["display_name"],
+         "open_issues": r["open_issues"], "open_sp": float(r["open_sp"] or 0)}
+        for r in rows
+    ]
+
+
+@app.get("/productivity/trends", response_model=schemas.ProductivityTrend)
+async def productivity_trends(
+    metric: str = Query("commits", description="commits | velocity"),
+    dateRange: str | None = Query("90d"),
+    db: Session = Depends(get_db),
+):
+    """Time-bucketed trend for charts, aggregated in SQL."""
+    window = parse_window(dateRange)
+    points: list[schemas.ProductivityTrendPoint] = []
+
+    if metric == "commits":
+        params: dict[str, Any] = {}
+        where = ["source = 'github'", "metric_type = 'commit'"]
+        if window is not None:
+            where.append("timestamp >= :win")
+            params["win"] = window
+        rows = db.execute(text(f"""
+            SELECT to_char(date_trunc('day', timestamp), 'YYYY-MM-DD') AS day, COUNT(*)::int AS n
+            FROM metrics WHERE {' AND '.join(where)}
+            GROUP BY day ORDER BY day
+        """), params).mappings().all()
+        points = [schemas.ProductivityTrendPoint(label=r["day"][5:], value=r["n"]) for r in rows]
+
+    elif metric == "velocity":
+        rows = db.execute(text("""
+            SELECT s.name AS sprint, COALESCE(SUM(a.story_points), 0)::float AS sp
+            FROM sprints s
+            LEFT JOIN sprint_allocations a ON a.sprint_id = s.id
+            GROUP BY s.id, s.name, s.start_date
+            ORDER BY s.start_date NULLS LAST, s.id
+        """)).mappings().all()
+        points = [schemas.ProductivityTrendPoint(label=(r["sprint"] or "")[:18], value=r["sp"]) for r in rows]
+
+    return schemas.ProductivityTrend(metric=metric, points=points)
 
 
 @app.get("/events", response_model=list[schemas.EventOut])

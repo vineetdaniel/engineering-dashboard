@@ -10,6 +10,8 @@ export interface Resource {
   team: string;
   role: ResourceRole;
   default_hours_per_sprint: number;
+  github_handle: string | null;
+  jira_account_id: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -20,6 +22,8 @@ export interface ResourceInput {
   team: string;
   role: ResourceRole;
   default_hours_per_sprint: number;
+  github_handle?: string | null;
+  jira_account_id?: string | null;
 }
 
 export interface ActionResult<T> {
@@ -109,6 +113,14 @@ export async function updateResource(
     if (input.default_hours_per_sprint !== undefined) {
       sets.push(`default_hours_per_sprint = $${idx++}`);
       values.push(input.default_hours_per_sprint);
+    }
+    if (input.github_handle !== undefined) {
+      sets.push(`github_handle = $${idx++}`);
+      values.push(input.github_handle ? input.github_handle.trim().toLowerCase() : null);
+    }
+    if (input.jira_account_id !== undefined) {
+      sets.push(`jira_account_id = $${idx++}`);
+      values.push(input.jira_account_id ? input.jira_account_id.trim() : null);
     }
     if (sets.length === 0) return { error: "Nothing to update" };
 

@@ -28,6 +28,7 @@ import {
   type ImportPayload,
   type ImportSprintPlanPayload,
 } from "@/lib/actions/sprints";
+import { suggestSprintName } from "@/lib/dates";
 
 type ExpectedType = "allocation" | "sprint";
 
@@ -52,6 +53,7 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const bufferRef = useRef<ArrayBuffer | null>(null);
+  const fileNameRef = useRef<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reset = () => {
@@ -64,10 +66,11 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
   const parseBuffer = (buffer: ArrayBuffer, targetMode: ExpectedType) => {
     reset();
     try {
+      const fileName = fileNameRef.current;
       if (targetMode === "allocation") {
-        setAllocation(parseAllocationFile(buffer));
+        setAllocation(parseAllocationFile(buffer, fileName));
       } else {
-        setSprintPlan(parseSprintFile(buffer));
+        setSprintPlan(parseSprintFile(buffer, fileName));
       }
     } catch (err) {
       if (err instanceof FileTypeMismatchError) {
@@ -90,6 +93,7 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
     setError(null);
     const buffer = await file.arrayBuffer();
     bufferRef.current = buffer;
+    fileNameRef.current = file.name;
     parseBuffer(buffer, mode);
   };
 
@@ -131,7 +135,7 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
     }));
 
     const result = await importAllocation({
-      name: meta.name,
+      name: suggestSprintName(meta.name, meta.start_date, meta.end_date),
       start_date: meta.start_date,
       end_date: meta.end_date,
       target_sprint_id: meta.target_sprint_id,
@@ -160,7 +164,7 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
     setError(null);
 
     const result = await importSprintPlan({
-      name: meta.name,
+      name: suggestSprintName(meta.name, meta.start_date, meta.end_date),
       start_date: meta.start_date,
       end_date: meta.end_date,
       target_sprint_id: meta.target_sprint_id,

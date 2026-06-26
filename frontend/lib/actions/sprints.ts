@@ -261,10 +261,13 @@ export async function findSprintConflicts(input: {
   end_date?: string | null;
 }): Promise<ActionResult<{ nameMatch: Sprint | null; overlaps: Sprint[] }>> {
   try {
-    const nameRow = await queryOne<Sprint>(
-      "SELECT * FROM sprints WHERE LOWER(name) = LOWER($1) ORDER BY id LIMIT 1",
-      [input.name.trim()]
-    );
+    const trimmedName = (input.name || "").trim();
+    const nameRow = trimmedName
+      ? await queryOne<Sprint>(
+          "SELECT * FROM sprints WHERE LOWER(name) = LOWER($1) ORDER BY id LIMIT 1",
+          [trimmedName]
+        )
+      : null;
     let overlaps: Sprint[] = [];
     if (input.start_date && input.end_date) {
       overlaps = await query<Sprint>(

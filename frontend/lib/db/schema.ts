@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS allocation_tasks (
 );
 
 ALTER TABLE allocation_tasks ADD COLUMN IF NOT EXISTS uat_date DATE;
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS github_handle VARCHAR(100);
+ALTER TABLE resources ADD COLUMN IF NOT EXISTS jira_account_id VARCHAR(200);
 
 CREATE INDEX IF NOT EXISTS idx_resources_team ON resources(team);
 CREATE INDEX IF NOT EXISTS idx_resources_active ON resources(is_active);

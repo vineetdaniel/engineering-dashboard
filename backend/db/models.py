@@ -1,5 +1,5 @@
 import datetime as dt
-from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Text, Boolean, create_engine
+from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Text, Boolean, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from backend.config import settings
 
@@ -43,8 +43,30 @@ class ConnectorConfig(Base):
     updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)
 
 
+# Indexes that support the per-developer productivity rollups. The `meta`
+# column is JSON, so we index its extracted text fields. These are functional
+# B-tree indexes partial-filtered by source to stay small. Idempotent.
+_PRODUCTIVITY_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_metrics_author_name "
+    "ON metrics ((meta ->> 'author_name')) WHERE source = 'github'",
+    "CREATE INDEX IF NOT EXISTS ix_metrics_assignee_name "
+    "ON metrics ((meta ->> 'assignee_name')) WHERE source = 'jira'",
+    "CREATE INDEX IF NOT EXISTS ix_metrics_source_type_ts "
+    "ON metrics (source, metric_type, timestamp)",
+]
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Productivity rollup indexes (Postgres only; skipped silently otherwise).
+    try:
+        with engine.begin() as conn:
+            for stmt in _PRODUCTIVITY_INDEXES:
+                conn.execute(text(stmt))
+    except Exception:
+        # Index creation is a performance optimization, not correctness — never
+        # block startup on it (e.g. non-Postgres backends or permission issues).
+        pass
 
 
 def get_db():

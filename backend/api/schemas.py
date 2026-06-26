@@ -34,6 +34,48 @@ class EventOut(BaseModel):
         from_attributes = True
 
 
+class DeveloperProductivity(BaseModel):
+    resource_id: Optional[int] = None
+    name: str
+    team: Optional[str] = None
+    role: Optional[str] = None
+    # Planning signals
+    allocated_story_points: float = 0
+    effective_hours: float = 0
+    total_tasks: int = 0
+    done_tasks: int = 0
+    completion_pct: float = 0
+    sp_per_effective_hour: Optional[float] = None
+    category_mix: Dict[str, int] = {}
+    # Connector signals (joined by exact account id or fuzzy name)
+    commits: int = 0
+    jira_done_points: float = 0
+    jira_open_points: float = 0
+    jira_open_issues: int = 0
+    matched: bool = True  # False = a connector identity with no planning resource
+
+
+class ProductivitySummary(BaseModel):
+    developers: List[DeveloperProductivity]
+    unmatched: List[DeveloperProductivity]
+    total_commits: int = 0
+    total_allocated_points: float = 0
+    total_done_tasks: int = 0
+    total_tasks: int = 0
+    avg_completion_pct: float = 0
+    active_developers: int = 0
+
+
+class ProductivityTrendPoint(BaseModel):
+    label: str
+    value: float
+
+
+class ProductivityTrend(BaseModel):
+    metric: str
+    points: List[ProductivityTrendPoint]
+
+
 class ConnectorHealthResponse(BaseModel):
     connectors: Dict[str, Dict[str, Any]]
 

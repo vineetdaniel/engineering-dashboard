@@ -9,6 +9,7 @@ import { Timeline } from "@/components/widgets/Timeline";
 import { OnCallRotation } from "@/components/widgets/OnCallRotation";
 import { OnCallCalendar } from "@/components/widgets/OnCallCalendar";
 import { CapacityPlanning } from "@/components/widgets/CapacityPlanning";
+import { TeamRoster } from "@/components/widgets/TeamRoster";
 import type { ProgressItem } from "@/components/widgets/ProgressList";
 import type { TimelineEvent } from "@/components/widgets/Timeline";
 
@@ -55,6 +56,8 @@ export function TeamSection({ metrics, events, lastUpdated, dataSource }: Sectio
         <OnCallRotation />
         <OnCallCalendar />
       </div>
+
+      <TeamRoster />
 
       <CapacityPlanning metrics={metrics} events={events} />
 

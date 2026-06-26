@@ -14,7 +14,7 @@ class JenkinsConnector(Connector):
         self.base_url = (config.get("JENKINS_URL", "") if config else "").rstrip("/")
         self.api_key = config.get("JENKINS_API_KEY", "") if config else ""
         self.username = (config.get("JENKINS_USERNAME", "") if config else "") or "cto-dash"
-        self.timeout = 30.0
+        self.timeout = 5.0
 
     def _headers(self) -> Dict[str, str]:
         return {

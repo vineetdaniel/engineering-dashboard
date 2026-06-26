@@ -38,14 +38,23 @@ export function SprintConflictNotice({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await findSprintConflicts({
-        name,
-        start_date: startDate || null,
-        end_date: endDate || null,
-      });
-      if (cancelled || res.error || !res.data) return;
-      setNameMatch(res.data.nameMatch);
-      setOverlaps(res.data.overlaps);
+      try {
+        const res = await findSprintConflicts({
+          name,
+          start_date: startDate || null,
+          end_date: endDate || null,
+        });
+        if (cancelled || !res || res.error || !res.data) return;
+        setNameMatch(res.data.nameMatch);
+        setOverlaps(res.data.overlaps);
+      } catch {
+        // Conflict detection is advisory; ignore failures (server still
+        // validates overlap on submit).
+        if (!cancelled) {
+          setNameMatch(null);
+          setOverlaps([]);
+        }
+      }
     })();
     return () => {
       cancelled = true;

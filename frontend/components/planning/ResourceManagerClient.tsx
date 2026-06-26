@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ResourceForm } from "./ResourceForm";
 import { ResourceList } from "./ResourceList";
 import { PlanningSubNav } from "./PlanningSubNav";
@@ -14,6 +14,7 @@ import {
   type Resource,
   type ResourceInput,
 } from "@/lib/actions/resources";
+import { getGitHubLogins, getJiraAssignees, type GitHubLogin, type JiraAssignee } from "@/lib/api";
 
 interface ResourceManagerClientProps {
   initialResources: Resource[];
@@ -21,8 +22,15 @@ interface ResourceManagerClientProps {
 
 export function ResourceManagerClient({ initialResources }: ResourceManagerClientProps) {
   const [resources, setResources] = useState<Resource[]>(initialResources);
+  const [githubLogins, setGithubLogins] = useState<GitHubLogin[]>([]);
+  const [jiraAssignees, setJiraAssignees] = useState<JiraAssignee[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    getGitHubLogins().then(setGithubLogins).catch(() => {});
+    getJiraAssignees().then(setJiraAssignees).catch(() => {});
+  }, []);
 
   const load = async () => {
     const result = await listResources();
@@ -42,10 +50,11 @@ export function ResourceManagerClient({ initialResources }: ResourceManagerClien
 
   const handleUpdate = async (
     id: number,
-    input: { name: string; team: string; role: ResourceInput["role"]; default_hours_per_sprint: number }
+    input: { name: string; team: string; role: ResourceInput["role"]; default_hours_per_sprint: number; github_handle: string | null; jira_account_id: string | null }
   ) => {
-    await updateResource(id, input);
-    await load();
+    const result = await updateResource(id, input);
+    if (result?.error) setError(result.error);
+    else await load();
   };
 
   const handleToggle = async (id: number) => {
@@ -74,6 +83,8 @@ export function ResourceManagerClient({ initialResources }: ResourceManagerClien
       ) : (
         <ResourceList
           resources={resources}
+          githubLogins={githubLogins}
+          jiraAssignees={jiraAssignees}
           onToggle={handleToggle}
           onUpdate={handleUpdate}
         />

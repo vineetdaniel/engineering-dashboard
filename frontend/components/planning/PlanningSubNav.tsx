@@ -4,13 +4,14 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 interface PlanningSubNavProps {
-  active: "sprints" | "resources";
+  active: "sprints" | "resources" | "productivity";
 }
 
 export function PlanningSubNav({ active }: PlanningSubNavProps) {
   const items = [
     { id: "sprints", label: "Sprints", href: "/sprints" },
     { id: "resources", label: "Resources", href: "/resources" },
+    { id: "productivity", label: "Productivity", href: "/productivity" },
   ];
 
   return (
