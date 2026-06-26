@@ -211,6 +211,59 @@ def seed_metrics(db: Session, count_multiplier: int = 1) -> int:
                     )
                 )
 
+                # Story-point breakdowns (sprint, per-developer, backlog)
+                db.add(
+                    Metric(
+                        is_seed=True,
+                        source="jira",
+                        metric_type="backlog_story_points",
+                        entity=f"{squad}/{env}",
+                        value=float(random.randint(15, 80)),
+                        meta={"squad": squad, "environment": env, "issue_count": random.randint(5, 30)},
+                        timestamp=ts,
+                    )
+                )
+                devs = random.sample(
+                    ["alice", "bob", "carol", "dave", "erin", "frank"], k=random.randint(2, 4)
+                )
+                for dev in devs:
+                    db.add(
+                        Metric(
+                            is_seed=True,
+                            source="jira",
+                            metric_type="developer_open_story_points",
+                            entity=f"{squad}/{env}",
+                            value=float(random.randint(3, 25)),
+                            meta={
+                                "squad": squad,
+                                "environment": env,
+                                "assignee_login": dev,
+                                "assignee_name": dev.capitalize(),
+                                "issue_count": random.randint(1, 8),
+                            },
+                            timestamp=ts,
+                        )
+                    )
+                    db.add(
+                        Metric(
+                            is_seed=True,
+                            source="jira",
+                            metric_type="sprint_points_per_developer",
+                            entity=f"{squad}/{env}",
+                            value=float(random.randint(5, 30)),
+                            meta={
+                                "squad": squad,
+                                "environment": env,
+                                "sprint_id": random.randint(100, 999),
+                                "sprint_name": f"{squad.capitalize()} Sprint {random.randint(1, 12)}",
+                                "assignee_login": dev,
+                                "assignee_name": dev.capitalize(),
+                                "completed_points": float(random.randint(0, 20)),
+                            },
+                            timestamp=ts,
+                        )
+                    )
+
                 # API gateway security signals
                 db.add(
                     Metric(

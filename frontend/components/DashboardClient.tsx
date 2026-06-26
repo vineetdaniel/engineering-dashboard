@@ -3,9 +3,7 @@
 import { useMemo, useState, useEffect, Suspense, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
-import { Sidebar, MobileNav, MobileBottomNav, navSections } from "@/components/Sidebar";
-import { Header } from "@/components/Header";
-import { CommandMenu } from "@/components/CommandMenu";
+import { DashboardShell } from "@/components/DashboardShell";
 import { getConnectorHealth, syncSource, getMetrics, getEvents } from "@/lib/api";
 import { type FilterState } from "@/components/GlobalFilters";
 import { SkeletonGrid } from "@/components/widgets/SkeletonGrid";
@@ -225,110 +223,82 @@ export function DashboardClient({
   };
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <Sidebar active={active} onSelect={setActive} />
+    <DashboardShell activeSection={active} className="p-4 pb-20 md:pb-4 lg:p-6">
+      <IncidentBanner count={data.p0p1Incidents.length} />
 
-      <div className="flex flex-1 flex-col min-w-0">
-        <Header
-          onRefresh={refreshData}
-          onOpenCommand={() => setCommandOpen(true)}
-          criticalCount={data.criticalCount}
-          incidentCount={data.p0p1Incidents.length}
-          filters={filters}
-          onFiltersChange={setFilters}
-          lastUpdated={lastUpdated}
-          backendOk={backendOk}
-        />
-        <MobileNav active={active} onSelect={setActive} />
+      {!backendOk && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <strong>Backend unreachable.</strong> Start the API with:{" "}
+          <code className="rounded bg-muted px-1 py-0.5 dark:bg-black/20">
+            uvicorn backend.api.main:app --port 8000
+          </code>
+          . Showing cached data.
+        </div>
+      )}
 
-        <CommandMenu
-          sections={navSections}
-          active={active}
-          onSelect={setActive}
-          onRefresh={refreshData}
-          open={commandOpen}
-          onOpenChange={setCommandOpen}
-        />
+      {error && (
+        <div className="mb-4 rounded-xl border border-rose-200 bg-amber-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
+          {error}
+        </div>
+      )}
 
-        <main className="flex-1 p-4 pb-20 md:pb-4 lg:p-6">
-          <IncidentBanner count={data.p0p1Incidents.length} />
-
-          {!backendOk && (
-            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-              <strong>Backend unreachable.</strong> Start the API with:{" "}
-              <code className="rounded bg-muted px-1 py-0.5 dark:bg-black/20">
-                uvicorn backend.api.main:app --port 8000
-              </code>
-              . Showing cached data.
-            </div>
-          )}
-
-          {error && (
-            <div className="mb-4 rounded-xl border border-rose-200 bg-amber-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-200">
-              {error}
-            </div>
-          )}
-
-          <Suspense fallback={<SkeletonGrid cols={4} rows={2} />}>
-            {active === "overview" && (
-              <WidgetErrorBoundary>
-                <OverviewSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "engineering" && (
-              <WidgetErrorBoundary>
-                <EngineeringSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "product" && (
-              <WidgetErrorBoundary>
-                <ProductSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "operations" && (
-              <WidgetErrorBoundary>
-                <OperationsSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "security" && (
-              <WidgetErrorBoundary>
-                <SecuritySection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "compliance" && (
-              <WidgetErrorBoundary>
-                <ComplianceSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "cost" && (
-              <WidgetErrorBoundary>
-                <CostSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "team" && (
-              <WidgetErrorBoundary>
-                <TeamSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "payments" && (
-              <WidgetErrorBoundary>
-                <PaymentsSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "settings" && (
-              <WidgetErrorBoundary>
-                <SettingsSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-            {active === "reports" && (
-              <WidgetErrorBoundary>
-                <ReportsSection {...sectionProps} />
-              </WidgetErrorBoundary>
-            )}
-          </Suspense>
-        </main>
-        <MobileBottomNav active={active} onSelect={setActive} />
-      </div>
-    </div>
+      <Suspense fallback={<SkeletonGrid cols={4} rows={2} />}>
+        {active === "overview" && (
+          <WidgetErrorBoundary>
+            <OverviewSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "engineering" && (
+          <WidgetErrorBoundary>
+            <EngineeringSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "product" && (
+          <WidgetErrorBoundary>
+            <ProductSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "operations" && (
+          <WidgetErrorBoundary>
+            <OperationsSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "security" && (
+          <WidgetErrorBoundary>
+            <SecuritySection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "compliance" && (
+          <WidgetErrorBoundary>
+            <ComplianceSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "cost" && (
+          <WidgetErrorBoundary>
+            <CostSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "team" && (
+          <WidgetErrorBoundary>
+            <TeamSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "payments" && (
+          <WidgetErrorBoundary>
+            <PaymentsSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "settings" && (
+          <WidgetErrorBoundary>
+            <SettingsSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+        {active === "reports" && (
+          <WidgetErrorBoundary>
+            <ReportsSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        )}
+      </Suspense>
+    </DashboardShell>
   );
 }

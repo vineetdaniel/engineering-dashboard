@@ -53,6 +53,7 @@ _CONNECTOR_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "JIRA_USERNAME": settings.JIRA_USERNAME,
         "JIRA_API_TOKEN": settings.JIRA_API_TOKEN,
         "JIRA_PROJECT_KEYS": settings.JIRA_PROJECT_KEYS,
+        "JIRA_STORY_POINTS_FIELD": settings.JIRA_STORY_POINTS_FIELD,
     },
     "observability": {
         "OBSERVABILITY_PROVIDER": settings.OBSERVABILITY_PROVIDER,

@@ -12,3 +12,5 @@ export { SecretsTable } from "./SecretsTable";
 export { ComplianceUploadPanel } from "./ComplianceUploadPanel";
 export { ComplianceControlsTable } from "./ComplianceControlsTable";
 export { MonthlySpendHistory } from "./MonthlySpendHistory";
+export { DeveloperPointsTable, type DeveloperPointsRow } from "./DeveloperPointsTable";
+export { SprintDeveloperPoints, type SprintDeveloperRow } from "./SprintDeveloperPoints";

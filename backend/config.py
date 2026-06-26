@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     JIRA_USERNAME: str = ""
     JIRA_API_TOKEN: str = ""
     JIRA_PROJECT_KEYS: str = ""
+    JIRA_STORY_POINTS_FIELD: str = "customfield_10016"
 
     OBSERVABILITY_PROVIDER: str = "datadog"
 

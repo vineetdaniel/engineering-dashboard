@@ -1,14 +1,19 @@
 "use client";
 
-import { CircleDot, TrendingUp, Zap, Activity } from "lucide-react";
+import { useMemo } from "react";
+import { CircleDot, TrendingUp, Zap, Activity, Layers } from "lucide-react";
 import { SectionProps } from "./types";
 import { SectionHeader } from "./SectionHeader";
 import { Stat } from "@/components/widgets/Stat";
 import { TrendChart } from "@/components/TrendChart";
 import { DataTable } from "@/components/widgets/DataTable";
 import { ProgressList } from "@/components/widgets/ProgressList";
+import { DeveloperPointsTable } from "@/components/widgets/DeveloperPointsTable";
+import { SprintDeveloperPoints } from "@/components/widgets/SprintDeveloperPoints";
 import type { DataTableRow } from "@/components/widgets/DataTable";
 import type { ProgressItem } from "@/components/widgets/ProgressList";
+import type { DeveloperPointsRow } from "@/components/widgets/DeveloperPointsTable";
+import type { SprintDeveloperRow } from "@/components/widgets/SprintDeveloperPoints";
 
 export function ProductSection({ data, metrics, events, lastUpdated, dataSource }: SectionProps) {
   const blockedRows: DataTableRow[] = data.blocked.map((e) => ({
@@ -72,6 +77,55 @@ export function ProductSection({ data, metrics, events, lastUpdated, dataSource 
       ? Math.round(((burndown[0].committed - (burndown[burndown.length - 1]?.remaining ?? 0)) / burndown[0].committed) * 100)
       : 68;
 
+  const backlogMetric = metrics.find((m) => m.metric_type === "backlog_story_points");
+  const backlogPoints = backlogMetric?.value ?? 0;
+  const backlogIssues = (backlogMetric?.meta?.issue_count as number) ?? 0;
+
+  const developerOpenPoints = useMemo(() => {
+    const byDev = new Map<string, DeveloperPointsRow>();
+    for (const m of metrics.filter((m) => m.metric_type === "developer_open_story_points")) {
+      const login = (m.meta?.assignee_login as string) || "unknown";
+      const existing = byDev.get(login);
+      if (existing) {
+        existing.points += m.value ?? 0;
+        existing.issueCount += (m.meta?.issue_count as number) ?? 0;
+      } else {
+        byDev.set(login, {
+          login,
+          name: (m.meta?.assignee_name as string) || login,
+          points: m.value ?? 0,
+          issueCount: (m.meta?.issue_count as number) ?? 0,
+          project: m.entity,
+        });
+      }
+    }
+    return Array.from(byDev.values()).sort((a, b) => b.points - a.points);
+  }, [metrics]);
+
+  const sprintDeveloperPoints = useMemo(() => {
+    const byKey = new Map<string, SprintDeveloperRow>();
+    for (const m of metrics.filter((m) => m.metric_type === "sprint_points_per_developer")) {
+      const login = (m.meta?.assignee_login as string) || "unknown";
+      const sprint = (m.meta?.sprint_name as string) || "Sprint";
+      const key = `${sprint}-${login}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.points += m.value ?? 0;
+        existing.completedPoints += (m.meta?.completed_points as number) ?? 0;
+      } else {
+        byKey.set(key, {
+          sprint,
+          developer: (m.meta?.assignee_name as string) || login,
+          login,
+          points: m.value ?? 0,
+          completedPoints: (m.meta?.completed_points as number) ?? 0,
+          project: m.entity,
+        });
+      }
+    }
+    return Array.from(byKey.values()).sort((a, b) => b.points - a.points);
+  }, [metrics]);
+
   return (
     <div className="space-y-5 animate-fade-in">
       <SectionHeader
@@ -80,7 +134,7 @@ export function ProductSection({ data, metrics, events, lastUpdated, dataSource 
         lastUpdated={lastUpdated}
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Stat
           title="Open Issues"
           value={data.openIssues}
@@ -110,6 +164,13 @@ export function ProductSection({ data, metrics, events, lastUpdated, dataSource 
           icon={Activity}
           sparklineData={velocityTrend.map((v) => v.value)}
         />
+        <Stat
+          title="Backlog Points"
+          value={backlogPoints}
+          icon={Layers}
+          variant={backlogPoints > 60 ? "warning" : "success"}
+          subtext={`${backlogIssues} backlog issues`}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -128,6 +189,19 @@ export function ProductSection({ data, metrics, events, lastUpdated, dataSource 
           title="Velocity Trend"
           subtitle="Story points / sprint (last 6)"
           data={velocityTrend}
+          dataSource={dataSource}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <SprintDeveloperPoints
+          rows={sprintDeveloperPoints}
+          subtitle="Active sprint breakdown by assignee"
+          dataSource={dataSource}
+        />
+        <DeveloperPointsTable
+          rows={developerOpenPoints}
+          subtitle="Unresolved points owned by each developer"
           dataSource={dataSource}
         />
       </div>

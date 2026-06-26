@@ -15,7 +15,9 @@ import {
   X,
   FileCheck,
   FileText,
+  CalendarRange,
 } from "lucide-react";
+import Link from "next/link";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
@@ -30,6 +32,7 @@ export const navSections = [
   { label: "Compliance", icon: FileCheck, value: "compliance" },
   { label: "Cost", icon: Wallet, value: "cost" },
   { label: "Reports", icon: FileText, value: "reports" },
+  { label: "Planning", icon: CalendarRange, value: "planning", href: "/sprints" },
   { label: "Team", icon: Users, value: "team" },
   { label: "Settings", icon: Settings, value: "settings" },
 ];
@@ -77,26 +80,34 @@ function NavButton({
   active,
   onClick,
 }: {
-  item: { label: string; icon: React.ElementType; value: string };
+  item: { label: string; icon: React.ElementType; value: string; href?: string };
   active: boolean;
   onClick: () => void;
 }) {
   const Icon = item.icon;
+  const content = (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex h-10 w-10 items-center justify-center rounded-xl transition",
+        active
+          ? "bg-primary text-primary-foreground shadow-sm"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+      )}
+      aria-label={item.label}
+    >
+      <Icon size={20} />
+    </button>
+  );
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          onClick={onClick}
-          className={cn(
-            "flex h-10 w-10 items-center justify-center rounded-xl transition",
-            active
-              ? "bg-primary text-primary-foreground shadow-sm"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground"
-          )}
-          aria-label={item.label}
-        >
-          <Icon size={20} />
-        </button>
+        {item.href ? (
+          <Link href={item.href} onClick={onClick}>{content}</Link>
+        ) : (
+          content
+        )}
       </TooltipTrigger>
       <TooltipContent side="right">
         <p>{item.label}</p>
