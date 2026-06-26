@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { suggestSprintName } from "@/lib/dates";
 import type { SprintInput, SprintStatus } from "@/lib/actions/sprints";
 
 interface SprintCreateModalProps {
@@ -70,9 +71,17 @@ export function SprintCreateModal({ onCreate, children }: SprintCreateModalProps
               id="sprint-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Sprint 24"
-              required
+              placeholder={
+                !name.trim() && (startDate || endDate)
+                  ? suggestSprintName(null, startDate, endDate)
+                  : "e.g. Sprint 24"
+              }
             />
+            {!name.trim() && (startDate || endDate) && (
+              <p className="text-xs text-muted-foreground">
+                Will be named <span className="font-medium">{suggestSprintName(null, startDate, endDate)}</span>
+              </p>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">

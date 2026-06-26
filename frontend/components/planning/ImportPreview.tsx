@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import type { ParsedAllocation } from "@/lib/excel/parser";
 import { SprintConflictNotice } from "./SprintConflictNotice";
+import { suggestSprintName } from "@/lib/dates";
 
 interface ImportPreviewProps {
   parsed: ParsedAllocation;
@@ -41,7 +42,11 @@ export function ImportPreview({ parsed, onConfirm, onCancel, error, loading }: I
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="space-y-1.5">
           <Label>Sprint name</Label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={suggestSprintName(null, startDate, endDate)}
+          />
         </div>
         <div className="space-y-1.5">
           <Label>Start date</Label>
@@ -54,7 +59,7 @@ export function ImportPreview({ parsed, onConfirm, onCancel, error, loading }: I
       </div>
 
       <SprintConflictNotice
-        name={name}
+        name={suggestSprintName(name, startDate, endDate)}
         startDate={startDate}
         endDate={endDate}
         value={targetSprintId}

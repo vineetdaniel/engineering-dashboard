@@ -1,5 +1,25 @@
 import { parse, isValid, format } from "date-fns";
 
+/**
+ * Derive a non-blank sprint name. If a name is supplied, use it; otherwise build
+ * "Sprint-<start>-<end>" from whatever dates are available so a sprint is never
+ * created nameless. Client- and server-safe (plain function, no server action).
+ */
+export function suggestSprintName(
+  name: string | null | undefined,
+  startDate?: string | null,
+  endDate?: string | null
+): string {
+  const trimmed = (name || "").trim();
+  if (trimmed) return trimmed;
+  const start = (startDate || "").trim();
+  const end = (endDate || "").trim();
+  if (start && end) return `Sprint-${start}-${end}`;
+  if (start) return `Sprint-${start}`;
+  if (end) return `Sprint-${end}`;
+  return "Sprint";
+}
+
 export function parseIndianDate(
   value: string | number | null | undefined,
   fallbackYear?: number

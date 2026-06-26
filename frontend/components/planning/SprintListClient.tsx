@@ -7,7 +7,7 @@ import { SprintList } from "./SprintList";
 import { SprintCreateModal } from "./SprintCreateModal";
 import { ImportDialog } from "./ImportDialog";
 import { PlanningSubNav } from "./PlanningSubNav";
-import { createSprint, listSprints, type SprintListItem, type SprintInput, type SprintStatus } from "@/lib/actions/sprints";
+import { createSprint, deleteSprint, listSprints, type SprintListItem, type SprintInput, type SprintStatus } from "@/lib/actions/sprints";
 
 interface SprintListClientProps {
   initialSprints: SprintListItem[];
@@ -29,6 +29,16 @@ export function SprintListClient({ initialSprints }: SprintListClientProps) {
     if (result.error) return { error: result.error };
     await load(status);
     return {};
+  };
+
+  const handleDelete = async (id: number) => {
+    // Optimistic removal; reload to stay in sync if the action fails.
+    setSprints((prev) => prev.filter((s) => s.id !== id));
+    const result = await deleteSprint(id);
+    if (result.error) {
+      setError(result.error);
+      await load(status);
+    }
   };
 
   return (
@@ -65,7 +75,7 @@ export function SprintListClient({ initialSprints }: SprintListClientProps) {
         </Tabs>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-      <SprintList sprints={sprints} />
+      <SprintList sprints={sprints} onDelete={handleDelete} />
     </div>
   );
 }

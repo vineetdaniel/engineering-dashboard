@@ -9,6 +9,7 @@ import { AlertCircle, CheckCircle2 } from "lucide-react";
 import type { ParsedSprintPlan } from "@/lib/excel/parser";
 import type { ImportSprintPlanPayload } from "@/lib/actions/sprints";
 import { SprintConflictNotice } from "./SprintConflictNotice";
+import { suggestSprintName } from "@/lib/dates";
 
 interface SprintImportPreviewProps {
   parsed: ParsedSprintPlan;
@@ -70,7 +71,11 @@ export function SprintImportPreview({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="space-y-1.5">
           <Label>Sprint name</Label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={suggestSprintName(null, startDate, endDate)}
+          />
         </div>
         <div className="space-y-1.5">
           <Label>Start date</Label>
@@ -83,7 +88,7 @@ export function SprintImportPreview({
       </div>
 
       <SprintConflictNotice
-        name={name}
+        name={suggestSprintName(name, startDate, endDate)}
         startDate={startDate}
         endDate={endDate}
         value={targetSprintId}

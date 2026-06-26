@@ -1,11 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Trash2 } from "lucide-react";
 import type { SprintListItem, SprintStatus } from "@/lib/actions/sprints";
 
 interface SprintListProps {
   sprints: SprintListItem[];
+  onDelete?: (id: number) => void;
 }
 
 const statusVariant: Record<SprintStatus, "default" | "success" | "warning" | "secondary"> = {
@@ -23,7 +27,9 @@ function formatDate(date: string | null) {
   });
 }
 
-export function SprintList({ sprints }: SprintListProps) {
+export function SprintList({ sprints, onDelete }: SprintListProps) {
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+
   if (sprints.length === 0) {
     return (
       <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-border bg-card">
@@ -42,6 +48,7 @@ export function SprintList({ sprints }: SprintListProps) {
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3 text-right">Resources</th>
             <th className="px-4 py-3 text-right">Story points</th>
+            {onDelete && <th className="px-4 py-3 text-right"></th>}
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -63,6 +70,44 @@ export function SprintList({ sprints }: SprintListProps) {
               </td>
               <td className="px-4 py-3 text-right">{s.resource_count}</td>
               <td className="px-4 py-3 text-right font-semibold">{s.total_story_points}</td>
+              {onDelete && (
+                <td className="px-4 py-3 text-right">
+                  {confirmId === s.id ? (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="text-xs text-muted-foreground">Delete?</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-destructive"
+                        onClick={() => {
+                          onDelete(s.id);
+                          setConfirmId(null);
+                        }}
+                      >
+                        Yes
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => setConfirmId(null)}
+                      >
+                        No
+                      </Button>
+                    </span>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      onClick={() => setConfirmId(s.id)}
+                      aria-label={`Delete ${s.name}`}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  )}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

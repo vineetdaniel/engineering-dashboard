@@ -2,6 +2,7 @@
 
 import { query, queryOne, withTransaction } from "@/lib/db";
 import { listResources } from "@/lib/actions/resources";
+import { suggestSprintName } from "@/lib/dates";
 import type { PoolClient, QueryResultRow } from "pg";
 
 export type SprintStatus = "planning" | "active" | "completed";
@@ -232,7 +233,7 @@ async function findOrCreateSprint(
     return { sprint: target.rows[0], matched: true };
   }
 
-  const name = input.name.trim();
+  const name = suggestSprintName(input.name, input.start_date, input.end_date);
   const existing = await runner.query<Sprint>(
     "SELECT * FROM sprints WHERE LOWER(name) = LOWER($1) ORDER BY id LIMIT 1",
     [name]
@@ -312,7 +313,11 @@ const queryRunner: QueryRunner = {
 };
 
 export async function createSprint(input: SprintInput): Promise<ActionResult<Sprint>> {
-  if (!input.name?.trim()) return { error: "Sprint name is required" };
+  // A name is optional as long as we can derive one from the dates.
+  if (!input.name?.trim() && !input.start_date && !input.end_date) {
+    return { error: "Enter a sprint name or a date range." };
+  }
+  const name = suggestSprintName(input.name, input.start_date, input.end_date);
   try {
     await assertNoOverlap(queryRunner, {
       start: input.start_date || null,
@@ -321,9 +326,28 @@ export async function createSprint(input: SprintInput): Promise<ActionResult<Spr
     const row = await queryOne<Sprint>(
       `INSERT INTO sprints (name, start_date, end_date, status)
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [input.name.trim(), input.start_date || null, input.end_date || null, input.status || "planning"]
+      [name, input.start_date || null, input.end_date || null, input.status || "planning"]
     );
     return { data: row || undefined };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
+/**
+ * Delete a sprint and all of its data. Foreign keys cascade:
+ * sprints → sprint_allocations → allocation_tasks, so allocations and tasks
+ * are removed automatically. Resource records are NOT deleted — they are shared
+ * across sprints.
+ */
+export async function deleteSprint(id: number): Promise<ActionResult<{ id: number }>> {
+  try {
+    const result = await query<{ id: number }>(
+      "DELETE FROM sprints WHERE id = $1 RETURNING id",
+      [id]
+    );
+    if (result.length === 0) return { error: "Sprint not found" };
+    return { data: { id } };
   } catch (error) {
     return { error: (error as Error).message };
   }
