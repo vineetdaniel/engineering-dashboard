@@ -6,6 +6,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { TrendChart } from "@/components/TrendChart";
 import { PlanningSubNav } from "./PlanningSubNav";
+import { WorkloadHeatmap } from "./WorkloadHeatmap";
+import { SprintVelocityChart } from "./SprintVelocityChart";
 import { AlertCircle, ArrowUpDown } from "lucide-react";
 import {
   getDeveloperProductivity,
@@ -14,6 +16,7 @@ import {
   type ProductivityTrend,
   type DeveloperProductivity,
 } from "@/lib/api";
+
 import type { SprintListItem } from "@/lib/actions/sprints";
 
 type DateRange = "24h" | "7d" | "30d" | "90d";
@@ -22,14 +25,12 @@ type SortKey = "name" | "commits" | "allocated_story_points" | "completion_pct" 
 interface ProductivityClientProps {
   initialSummary: ProductivitySummary;
   initialCommitTrend: ProductivityTrend;
-  velocityTrend: ProductivityTrend;
   sprints: SprintListItem[];
 }
 
 export function ProductivityClient({
   initialSummary,
   initialCommitTrend,
-  velocityTrend,
   sprints,
 }: ProductivityClientProps) {
   const [summary, setSummary] = useState(initialSummary);
@@ -161,15 +162,11 @@ export function ProductivityClient({
           color="#6366f1"
           className="h-64"
         />
-        <TrendChart
-          title="Velocity by sprint"
-          subtitle="Allocated story points"
-          data={velocityTrend.points}
-          type="bar"
-          color="#10b981"
-          className="h-64"
-        />
+        <SprintVelocityChart />
       </div>
+
+      {/* Workload risk heatmap */}
+      <WorkloadHeatmap developers={summary.developers} />
 
       {/* Per-developer table */}
       <Card className="overflow-hidden p-0">
@@ -198,6 +195,8 @@ export function ProductivityClient({
                 <th className="px-4 py-2">Developer</th>
                 <th className="px-4 py-2">Team</th>
                 <th className="px-4 py-2 text-right">Commits</th>
+                <th className="px-4 py-2 text-right">+Lines</th>
+                <th className="px-4 py-2 text-right">-Lines</th>
                 <th className="px-4 py-2 text-right">Alloc SP</th>
                 <th className="px-4 py-2 text-right">Plan tasks</th>
                 <th className="px-4 py-2 text-right">Jira open</th>
@@ -285,6 +284,12 @@ function DevRow({ d }: { d: DeveloperProductivity }) {
       <td className="px-4 py-2 font-medium">{d.name}</td>
       <td className="px-4 py-2 text-muted-foreground">{d.team || "—"}</td>
       <td className="px-4 py-2 text-right">{d.commits}</td>
+      <td className="px-4 py-2 text-right text-emerald-600 dark:text-emerald-400">
+        {d.lines_added > 0 ? `+${d.lines_added.toLocaleString()}` : "—"}
+      </td>
+      <td className="px-4 py-2 text-right text-red-500">
+        {d.lines_deleted > 0 ? `-${d.lines_deleted.toLocaleString()}` : "—"}
+      </td>
       <td className="px-4 py-2 text-right">{d.allocated_story_points}</td>
       <td className="px-4 py-2 text-right text-muted-foreground">
         {d.done_tasks}/{d.total_tasks}

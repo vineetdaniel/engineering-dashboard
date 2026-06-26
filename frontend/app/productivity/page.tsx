@@ -24,13 +24,9 @@ const EMPTY_SUMMARY: ProductivitySummary = {
 const EMPTY_TREND: ProductivityTrend = { metric: "", points: [] };
 
 export default async function ProductivityPage() {
-  // Fetch the initial (overall, 90d) view + chart data + sprint list for the
-  // toggle, all in parallel. Connector endpoints can fail if the backend is
-  // down — degrade to empty rather than crashing the page.
-  const [summary, commitTrend, velocityTrend, sprintsResult] = await Promise.all([
+  const [summary, commitTrend, sprintsResult] = await Promise.all([
     getDeveloperProductivity({ dateRange: "90d" }).catch(() => EMPTY_SUMMARY),
     getProductivityTrends("commits", "90d").catch(() => EMPTY_TREND),
-    getProductivityTrends("velocity").catch(() => EMPTY_TREND),
     listSprints("all"),
   ]);
 
@@ -39,7 +35,6 @@ export default async function ProductivityPage() {
       <ProductivityClient
         initialSummary={summary}
         initialCommitTrend={commitTrend}
-        velocityTrend={velocityTrend}
         sprints={sprintsResult.data || []}
       />
     </DashboardShell>

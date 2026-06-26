@@ -81,6 +81,8 @@ export interface DeveloperProductivity {
   sp_per_effective_hour: number | null;
   category_mix: Record<string, number>;
   commits: number;
+  lines_added: number;
+  lines_deleted: number;
   jira_done_points: number;
   jira_open_points: number;
   jira_open_issues: number;
@@ -143,3 +145,15 @@ export interface JiraAssignee {
 
 export const getJiraAssignees = (): Promise<JiraAssignee[]> =>
   api("/productivity/jira-assignees");
+
+export interface SprintVelocityDev {
+  name: string;
+  team: string;
+  sprints: Record<number, { sp: number; eff_hours: number }>;
+}
+export interface SprintVelocityData {
+  sprints: { id: number; name: string }[];
+  developers: SprintVelocityDev[];
+}
+export const getSprintVelocity = (): Promise<SprintVelocityData> =>
+  api("/productivity/sprint-velocity");

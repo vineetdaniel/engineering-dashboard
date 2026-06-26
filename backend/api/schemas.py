@@ -49,6 +49,8 @@ class DeveloperProductivity(BaseModel):
     category_mix: Dict[str, int] = {}
     # Connector signals (joined by exact account id or fuzzy name)
     commits: int = 0
+    lines_added: int = 0
+    lines_deleted: int = 0
     jira_done_points: float = 0
     jira_open_points: float = 0
     jira_open_issues: int = 0

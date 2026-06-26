@@ -139,11 +139,28 @@ class GitHubConnector(Connector):
                     client, repo_name, default_branch, days=90
                 )
                 seen_shas = set()
+                # Fetch diff stats for up to 50 most-recent commits (one API call each)
+                stat_shas = [c["sha"] for c in commits if c["sha"] not in seen_shas][:50]
+                semaphore = asyncio.Semaphore(10)
+                async def _fetch_stats(sha: str) -> tuple[str, int, int]:
+                    async with semaphore:
+                        try:
+                            r = await client.get(f"{self.base_url}/repos/{repo_name}/commits/{sha}")
+                            if r.status_code == 200:
+                                s = r.json().get("stats", {})
+                                return sha, int(s.get("additions", 0)), int(s.get("deletions", 0))
+                        except Exception:
+                            pass
+                        return sha, 0, 0
+                stat_results = await asyncio.gather(*[_fetch_stats(sha) for sha in stat_shas])
+                stats_map = {sha: (a, d) for sha, a, d in stat_results}
+
                 for c in commits:
                     if c["sha"] in seen_shas:
                         continue
                     seen_shas.add(c["sha"])
                     author = c["author_login"] or c["author_name"] or "Unknown"
+                    additions, deletions = stats_map.get(c["sha"], (0, 0))
                     metrics.append({
                         "source": "github",
                         "metric_type": "commit",
@@ -157,6 +174,8 @@ class GitHubConnector(Connector):
                             "message": c["message"],
                             "repo": repo_name,
                             "branch": c.get("branch"),
+                            "additions": additions,
+                            "deletions": deletions,
                         },
                         "timestamp": c["date"],
                     })

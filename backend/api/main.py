@@ -1169,18 +1169,24 @@ async def productivity_developers(
     commit_rows = db.execute(text(f"""
         SELECT meta->>'author_name' AS dev,
                LOWER(TRIM(meta->>'author_login')) AS login,
-               COUNT(*)::int AS commits
+               COUNT(*)::int AS commits,
+               COALESCE(SUM((meta->>'additions')::int), 0)::int AS lines_added,
+               COALESCE(SUM((meta->>'deletions')::int), 0)::int AS lines_deleted
         FROM metrics
         WHERE {' AND '.join(commit_where)} AND meta->>'author_name' IS NOT NULL
         GROUP BY meta->>'author_name', meta->>'author_login'
     """), commit_params).mappings().all()
     # Two lookup tables: by GitHub login (exact) and by normalized display name (fuzzy).
-    commits_by_login: dict[str, int] = {}
-    commits_by_name: dict[str, int] = {}
+    commits_by_login: dict[str, dict] = {}
+    commits_by_name: dict[str, dict] = {}
     for r in commit_rows:
+        entry = {"commits": r["commits"], "lines_added": r["lines_added"], "lines_deleted": r["lines_deleted"]}
         if r["login"]:
-            commits_by_login[r["login"]] = commits_by_login.get(r["login"], 0) + r["commits"]
-        commits_by_name[_norm_name(r["dev"])] = commits_by_name.get(_norm_name(r["dev"]), 0) + r["commits"]
+            existing = commits_by_login.get(r["login"], {"commits": 0, "lines_added": 0, "lines_deleted": 0})
+            commits_by_login[r["login"]] = {k: existing[k] + entry[k] for k in entry}
+        name_key = _norm_name(r["dev"])
+        existing = commits_by_name.get(name_key, {"commits": 0, "lines_added": 0, "lines_deleted": 0})
+        commits_by_name[name_key] = {k: existing[k] + entry[k] for k in entry}
 
     # --- Jira points + open issues per assignee ---
     # sprint mode: filter sprint_points_per_developer by sprint_id;
@@ -1254,13 +1260,13 @@ async def productivity_developers(
         # --- commits ---
         handle = (row["github_handle"] or "").strip().lower()
         if handle and handle in commits_by_login and handle not in consumed_commit_login:
-            commits = commits_by_login[handle]
+            commit_data = commits_by_login[handle]
             consumed_commit_login.add(handle)
             for r in commit_rows:
                 if (r["login"] or "") == handle:
                     consumed_commit_name.add(_norm_name(r["dev"]))
         else:
-            commits = claim(commits_by_name, consumed_commit_name, row["name"]) or 0
+            commit_data = claim(commits_by_name, consumed_commit_name, row["name"]) or {"commits": 0, "lines_added": 0, "lines_deleted": 0}
 
         # --- jira ---
         jira_id = (row["jira_account_id"] or "").strip()
@@ -1294,7 +1300,9 @@ async def productivity_developers(
                 "integration": row["cat_integration"],
                 "other": row["cat_other"],
             },
-            commits=commits,
+            commits=commit_data["commits"],
+            lines_added=commit_data.get("lines_added", 0),
+            lines_deleted=commit_data.get("lines_deleted", 0),
             jira_done_points=jira["done"],
             jira_open_points=jira["open"],
             jira_open_issues=jira.get("open_issues", 0),
@@ -1317,8 +1325,10 @@ async def productivity_developers(
         if key and key not in consumed_commit_name:
             jira = jira_by_name.get(key, {"done": 0.0, "open": 0.0, "open_issues": 0, "done_issues": 0})
             consumed_jira_name.add(key)
+            cd = commits_by_name.get(key) or commits_by_login.get(login, {"commits": r["commits"], "lines_added": 0, "lines_deleted": 0})
             unmatched.append(schemas.DeveloperProductivity(
-                name=r["dev"], commits=r["commits"],
+                name=r["dev"], commits=cd["commits"],
+                lines_added=cd.get("lines_added", 0), lines_deleted=cd.get("lines_deleted", 0),
                 jira_done_points=jira["done"], jira_open_points=jira["open"],
                 jira_open_issues=jira.get("open_issues", 0),
                 jira_done_issues=jira.get("done_issues", 0),
@@ -1398,6 +1408,37 @@ async def jira_assignees(db: Session = Depends(get_db)):
          "open_issues": r["open_issues"], "open_sp": float(r["open_sp"] or 0)}
         for r in rows
     ]
+
+
+@app.get("/productivity/sprint-velocity")
+async def sprint_velocity_per_developer(db: Session = Depends(get_db)):
+    """Per-developer allocated SP across sprints, for velocity trend chart."""
+    rows = db.execute(text("""
+        SELECT s.id AS sprint_id, s.name AS sprint_name, s.start_date,
+               r.name AS developer, r.team,
+               COALESCE(a.story_points, 0)::float AS sp,
+               COALESCE(a.effective_hours, 0)::float AS eff_hours
+        FROM sprints s
+        JOIN sprint_allocations a ON a.sprint_id = s.id
+        JOIN resources r ON r.id = a.resource_id
+        WHERE r.is_active = true
+        ORDER BY s.start_date NULLS LAST, s.id, r.name
+    """)).mappings().all()
+    # Pivot: { developer -> [{ sprint, sp, eff_hours }] }
+    by_dev: dict[str, dict] = {}
+    sprints_seen: dict[int, str] = {}
+    for r in rows:
+        sprints_seen[r["sprint_id"]] = r["sprint_name"] or f"Sprint {r['sprint_id']}"
+        dev = r["developer"]
+        if dev not in by_dev:
+            by_dev[dev] = {"team": r["team"], "sprints": {}}
+        by_dev[dev]["sprints"][r["sprint_id"]] = {"sp": r["sp"], "eff_hours": r["eff_hours"]}
+    sprint_list = [{"id": sid, "name": sname} for sid, sname in sorted(sprints_seen.items())]
+    developers = [
+        {"name": dev, "team": data["team"], "sprints": data["sprints"]}
+        for dev, data in sorted(by_dev.items())
+    ]
+    return {"sprints": sprint_list, "developers": developers}
 
 
 @app.get("/productivity/trends", response_model=schemas.ProductivityTrend)
