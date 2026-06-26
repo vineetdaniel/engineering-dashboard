@@ -1410,6 +1410,55 @@ async def jira_assignees(db: Session = Depends(get_db)):
     ]
 
 
+@app.get("/productivity/sprint-jira/{sprint_id}")
+async def sprint_jira_tickets(sprint_id: int, db: Session = Depends(get_db)):
+    """Jira open + done ticket counts per developer for a planning sprint.
+    Matches via resources.jira_account_id mapped to that sprint's allocations."""
+    rows = db.execute(text("""
+        SELECT r.name AS developer, r.team, r.jira_account_id,
+               -- open issues
+               COALESCE(MAX(CASE WHEN m.metric_type = 'developer_open_story_points'
+                                 THEN (m.meta->>'issue_count')::int END), 0) AS open_issues,
+               COALESCE(MAX(CASE WHEN m.metric_type = 'developer_open_story_points'
+                                 THEN (m.meta->>'done_count')::int END), 0) AS done_issues,
+               COALESCE(MAX(CASE WHEN m.metric_type = 'developer_open_story_points'
+                                 THEN value END), 0) AS open_sp,
+               COALESCE(MAX(CASE WHEN m.metric_type = 'developer_open_story_points'
+                                 THEN (m.meta->>'done_points')::float END), 0) AS done_sp,
+               -- sprint completed points (from Jira sprint_points_per_developer)
+               COALESCE(SUM(CASE WHEN m.metric_type = 'sprint_points_per_developer'
+                                 THEN (m.meta->>'completed_points')::float END), 0) AS sprint_done_sp,
+               COALESCE(SUM(CASE WHEN m.metric_type = 'sprint_points_per_developer'
+                                 THEN (m.meta->>'done_count')::int END), 0) AS sprint_done_count,
+               -- planning allocation
+               a.story_points AS alloc_sp,
+               a.effective_hours
+        FROM resources r
+        JOIN sprint_allocations a ON a.resource_id = r.id AND a.sprint_id = :sprint_id
+        LEFT JOIN metrics m ON m.source = 'jira'
+            AND m.metric_type IN ('developer_open_story_points', 'sprint_points_per_developer')
+            AND m.meta->>'assignee_login' = r.jira_account_id
+        WHERE r.jira_account_id IS NOT NULL
+        GROUP BY r.id, r.name, r.team, r.jira_account_id, a.story_points, a.effective_hours
+        ORDER BY r.name
+    """), {"sprint_id": sprint_id}).mappings().all()
+
+    return [
+        {
+            "developer": r["developer"],
+            "team": r["team"],
+            "jira_account_id": r["jira_account_id"],
+            "open_issues": int(r["open_issues"] or 0),
+            "done_issues": int(r["done_issues"] or 0) + int(r["sprint_done_count"] or 0),
+            "open_sp": float(r["open_sp"] or 0),
+            "done_sp": float(r["done_sp"] or 0) + float(r["sprint_done_sp"] or 0),
+            "alloc_sp": float(r["alloc_sp"] or 0),
+            "effective_hours": float(r["effective_hours"] or 0),
+        }
+        for r in rows
+    ]
+
+
 @app.get("/productivity/sprint-velocity")
 async def sprint_velocity_per_developer(db: Session = Depends(get_db)):
     """Per-developer allocated SP across sprints, for velocity trend chart."""

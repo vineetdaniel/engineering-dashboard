@@ -6,6 +6,7 @@ import { SprintHeader } from "./SprintHeader";
 import { AllocationTable } from "./AllocationTable";
 import { SummaryCards } from "./SummaryCards";
 import { SprintTaskMetrics } from "./SprintTaskMetrics";
+import { SprintJiraTickets } from "./SprintJiraTickets";
 import {
   updateSprint,
   createAllocation,
@@ -147,6 +148,8 @@ export function SprintDetailClient({ initialSprint, resources }: SprintDetailCli
       <SummaryCards allocations={sprint.allocations} />
 
       <SprintTaskMetrics allocations={sprint.allocations} />
+
+      <SprintJiraTickets sprintId={sprint.id} />
 
       <AllocationTable
         allocations={sprint.allocations}
