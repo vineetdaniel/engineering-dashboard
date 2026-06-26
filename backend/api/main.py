@@ -1410,6 +1410,225 @@ async def jira_assignees(db: Session = Depends(get_db)):
     ]
 
 
+@app.get("/productivity/jira-sprints")
+async def list_jira_sprints(db: Session = Depends(get_db)):
+    """All distinct Jira sprints available in the metrics DB."""
+    rows = db.execute(text("""
+        SELECT DISTINCT
+               (meta->>'sprint_id')::int AS sprint_id,
+               MAX(meta->>'sprint_name') AS sprint_name,
+               MAX(meta->>'project') AS project
+        FROM metrics
+        WHERE source = 'jira'
+          AND metric_type = 'sprint_points_per_developer'
+          AND meta->>'sprint_id' IS NOT NULL
+        GROUP BY (meta->>'sprint_id')::int
+        ORDER BY (meta->>'sprint_id')::int DESC
+    """)).mappings().all()
+    return [{"sprint_id": r["sprint_id"], "sprint_name": r["sprint_name"], "project": r["project"]} for r in rows]
+
+
+@app.get("/productivity/jira-sprint/{jira_sprint_id}")
+async def jira_sprint_detail(jira_sprint_id: int, db: Session = Depends(get_db)):
+    """Per-developer ticket breakdown for a specific Jira sprint ID."""
+    rows = db.execute(text("""
+        SELECT meta->>'assignee_name' AS developer,
+               meta->>'assignee_login' AS account_id,
+               MAX(meta->>'sprint_name') AS sprint_name,
+               MAX(meta->>'project') AS project,
+               COALESCE(SUM(value)::float, 0) AS total_sp,
+               COALESCE(SUM((meta->>'completed_points')::float), 0) AS done_sp,
+               COALESCE(SUM((meta->>'done_count')::int), 0) AS done_count
+        FROM metrics
+        WHERE source = 'jira'
+          AND metric_type = 'sprint_points_per_developer'
+          AND (meta->>'sprint_id')::int = :sprint_id
+          AND meta->>'assignee_name' IS NOT NULL
+        GROUP BY meta->>'assignee_name', meta->>'assignee_login'
+        ORDER BY done_count DESC, meta->>'assignee_name'
+    """), {"sprint_id": jira_sprint_id}).mappings().all()
+
+    # Also get open issues for each assignee
+    account_ids = [r["account_id"] for r in rows if r["account_id"]]
+    open_rows = {}
+    if account_ids:
+        placeholders = ", ".join(f":aid{i}" for i in range(len(account_ids)))
+        params = {f"aid{i}": aid for i, aid in enumerate(account_ids)}
+        open_data = db.execute(text(f"""
+            SELECT meta->>'assignee_login' AS account_id,
+                   COALESCE(SUM((meta->>'issue_count')::int), 0)::int AS open_issues,
+                   COALESCE(MAX((meta->>'done_count')::int), 0)::int AS done_issues
+            FROM metrics
+            WHERE source = 'jira'
+              AND metric_type = 'developer_open_story_points'
+              AND meta->>'assignee_login' IN ({placeholders})
+            GROUP BY meta->>'assignee_login'
+        """), params).mappings().all()
+        open_rows = {r["account_id"]: r for r in open_data}
+
+    return {
+        "jira_sprint_id": jira_sprint_id,
+        "sprint_name": rows[0]["sprint_name"] if rows else "",
+        "project": rows[0]["project"] if rows else "",
+        "developers": [
+            {
+                "developer": r["developer"],
+                "account_id": r["account_id"],
+                "total_sp": float(r["total_sp"] or 0),
+                "done_sp": float(r["done_sp"] or 0),
+                "done_count": int(r["done_count"] or 0),
+                "open_issues": int((open_rows.get(r["account_id"]) or {}).get("open_issues", 0)),
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/reports/sprint/{sprint_id}")
+async def sprint_report(sprint_id: int, db: Session = Depends(get_db)):
+    """PDF report for a planning sprint — allocations + Jira ticket breakdown."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage, HRFlowable
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+    # Fetch sprint + allocations
+    sprint_row = db.execute(text("SELECT * FROM sprints WHERE id = :id"), {"id": sprint_id}).mappings().first()
+    if not sprint_row:
+        raise HTTPException(status_code=404, detail="Sprint not found")
+
+    alloc_rows = db.execute(text("""
+        SELECT r.name, r.team, a.story_points, a.effective_hours, a.leave_days,
+               COUNT(t.id)::int AS total_tasks,
+               COUNT(t.id) FILTER (WHERE t.status='done')::int AS done_tasks
+        FROM sprint_allocations a
+        JOIN resources r ON r.id = a.resource_id
+        LEFT JOIN allocation_tasks t ON t.allocation_id = a.id
+        WHERE a.sprint_id = :sid
+        GROUP BY r.name, r.team, a.story_points, a.effective_hours, a.leave_days
+        ORDER BY r.team, r.name
+    """), {"sid": sprint_id}).mappings().all()
+
+    # Jira open/done per developer (matched via jira_account_id)
+    jira_rows = db.execute(text("""
+        SELECT r.name AS developer, r.team,
+               COALESCE(MAX(CASE WHEN m.metric_type='developer_open_story_points'
+                                 THEN (m.meta->>'issue_count')::int END), 0) AS open_issues,
+               COALESCE(MAX(CASE WHEN m.metric_type='developer_open_story_points'
+                                 THEN (m.meta->>'done_count')::int END), 0) +
+               COALESCE(SUM(CASE WHEN m.metric_type='sprint_points_per_developer'
+                                 THEN (m.meta->>'done_count')::int END), 0) AS done_issues
+        FROM resources r
+        JOIN sprint_allocations a ON a.resource_id = r.id AND a.sprint_id = :sid
+        LEFT JOIN metrics m ON m.source='jira'
+            AND m.metric_type IN ('developer_open_story_points','sprint_points_per_developer')
+            AND m.meta->>'assignee_login' = r.jira_account_id
+        WHERE r.jira_account_id IS NOT NULL
+        GROUP BY r.name, r.team
+    """), {"sid": sprint_id}).mappings().all()
+    jira_map = {r["developer"]: r for r in jira_rows}
+
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    sprint_name = sprint_row["name"] or f"Sprint {sprint_id}"
+    start = str(sprint_row["start_date"] or "")
+    end = str(sprint_row["end_date"] or "")
+
+    # Bar chart — SP per developer
+    names = [r["name"].split()[0] for r in alloc_rows]
+    sps = [float(r["story_points"] or 0) for r in alloc_rows]
+    fig, ax = plt.subplots(figsize=(8, 2.8))
+    bars = ax.bar(names, sps, color="#6366f1", alpha=0.85)
+    ax.set_ylabel("Story Points", fontsize=8)
+    ax.set_title("Allocated Story Points per Developer", fontsize=9)
+    ax.tick_params(axis="x", labelsize=7, rotation=30)
+    ax.tick_params(axis="y", labelsize=7)
+    ax.bar_label(bars, fmt="%.0f", fontsize=7)
+    plt.tight_layout()
+    chart_buf = io.BytesIO()
+    plt.savefig(chart_buf, format="png", dpi=120, bbox_inches="tight")
+    plt.close()
+    chart_buf.seek(0)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontSize=16, spaceAfter=4)
+    h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=11, spaceAfter=4, spaceBefore=10)
+    small = ParagraphStyle("small", parent=styles["Normal"], fontSize=8, textColor=colors.grey)
+    story = []
+
+    story.append(Paragraph(f"Sprint Report: {sprint_name}", h1))
+    story.append(Paragraph(f"{start} → {end}  ·  Generated {now}", small))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.lightgrey, spaceAfter=8))
+
+    # Summary row
+    total_sp = sum(float(r["story_points"] or 0) for r in alloc_rows)
+    total_eff = sum(float(r["effective_hours"] or 0) for r in alloc_rows)
+    total_open = sum(int((jira_map.get(r["name"]) or {}).get("open_issues", 0)) for r in alloc_rows)
+    total_done = sum(int((jira_map.get(r["name"]) or {}).get("done_issues", 0)) for r in alloc_rows)
+    summary_data = [
+        ["Developers", "Total SP", "Eff Hours", "Jira Open", "Jira Done"],
+        [str(len(alloc_rows)), f"{total_sp:.0f}", f"{total_eff:.0f}", str(total_open), str(total_done)],
+    ]
+    summary_table = Table(summary_data, colWidths=[3*cm]*5)
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#6366f1")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTSIZE", (0,0), (-1,-1), 9),
+        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#f8f8ff"), colors.white]),
+        ("BOX", (0,0), (-1,-1), 0.5, colors.lightgrey),
+        ("FONTNAME", (0,1), (-1,-1), "Helvetica-Bold"),
+        ("FONTSIZE", (0,1), (-1,-1), 12),
+    ]))
+    story.append(summary_table)
+
+    # SP chart
+    story.append(Paragraph("Story Point Allocation", h2))
+    story.append(RLImage(chart_buf, width=16*cm, height=5.5*cm))
+
+    # Allocation + Jira table
+    story.append(Paragraph("Developer Breakdown", h2))
+    headers = ["Developer", "Team", "Alloc SP", "Eff Hrs", "Leave", "Tasks", "Jira Open", "Jira Done"]
+    col_w = [3.5*cm, 2.5*cm, 1.8*cm, 1.8*cm, 1.5*cm, 1.5*cm, 2*cm, 2*cm]
+    table_data = [headers]
+    for r in alloc_rows:
+        j = jira_map.get(r["name"]) or {}
+        table_data.append([
+            r["name"], r["team"],
+            f"{float(r['story_points'] or 0):.0f}",
+            f"{float(r['effective_hours'] or 0):.0f}",
+            f"{float(r['leave_days'] or 0):.0f}",
+            f"{r['done_tasks']}/{r['total_tasks']}",
+            str(j.get("open_issues", "—")),
+            str(j.get("done_issues", "—")),
+        ])
+    alloc_table = Table(table_data, colWidths=col_w)
+    alloc_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1e1b4b")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTSIZE", (0,0), (-1,-1), 8),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#f5f5ff"), colors.white]),
+        ("BOX", (0,0), (-1,-1), 0.5, colors.lightgrey),
+        ("INNERGRID", (0,0), (-1,-1), 0.25, colors.lightgrey),
+        ("ALIGN", (2,0), (-1,-1), "CENTER"),
+    ]))
+    story.append(alloc_table)
+    story.append(Spacer(1, 0.3*cm))
+    story.append(Paragraph(f"CTO Dash  ·  {now}", small))
+
+    doc.build(story)
+    buf.seek(0)
+    filename = sprint_name.replace(" ", "_").replace("/", "-")
+    return StreamingResponse(buf, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="sprint_{filename}.pdf"'})
+
+
 @app.get("/productivity/sprint-jira/{sprint_id}")
 async def sprint_jira_tickets(sprint_id: int, db: Session = Depends(get_db)):
     """Jira open + done ticket counts per developer for a planning sprint.

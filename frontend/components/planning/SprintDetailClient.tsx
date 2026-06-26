@@ -136,9 +136,16 @@ export function SprintDetailClient({ initialSprint, resources }: SprintDetailCli
     <div className="mx-auto max-w-7xl space-y-6">
       <div className="flex items-center justify-between">
         <div className="text-sm text-muted-foreground">Sprint detail</div>
-        <Button variant="outline" size="sm" asChild>
-          <Link href="/sprints">Back to sprints</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <a href={`http://localhost:8000/reports/sprint/${sprint.id}`} target="_blank" rel="noreferrer" download>
+              Download report
+            </a>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/sprints">Back to sprints</Link>
+          </Button>
+        </div>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
