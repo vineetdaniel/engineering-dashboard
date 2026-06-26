@@ -1183,7 +1183,23 @@ async def productivity_developers(
         commits_by_name[_norm_name(r["dev"])] = commits_by_name.get(_norm_name(r["dev"]), 0) + r["commits"]
 
     # --- Jira points + open issues per assignee ---
-    jira_rows = db.execute(text("""
+    # sprint mode: filter sprint_points_per_developer by sprint_id;
+    # date-range mode: filter both metric types by timestamp window.
+    jira_params: dict[str, Any] = {}
+    if sprint_id is not None:
+        # In sprint mode: only sprint_points rows for this sprint + latest open/done snapshot
+        sprint_done_filter = "AND (metric_type != 'sprint_points_per_developer' OR (meta->>'sprint_id')::int = :jira_sprint_id)"
+        jira_params["jira_sprint_id"] = sprint_id
+        jira_time_filter = ""
+    elif window is not None:
+        sprint_done_filter = ""
+        jira_time_filter = "AND timestamp >= :jira_win"
+        jira_params["jira_win"] = window
+    else:
+        sprint_done_filter = ""
+        jira_time_filter = ""
+
+    jira_rows = db.execute(text(f"""
         SELECT meta->>'assignee_login' AS account_id,
                MAX(meta->>'assignee_name') AS dev,
                COALESCE(SUM(CASE WHEN metric_type='sprint_points_per_developer'
@@ -1200,8 +1216,10 @@ async def productivity_developers(
         WHERE source = 'jira'
           AND metric_type IN ('sprint_points_per_developer', 'developer_open_story_points')
           AND meta->>'assignee_login' IS NOT NULL
+          {sprint_done_filter}
+          {jira_time_filter}
         GROUP BY meta->>'assignee_login'
-    """)).mappings().all()
+    """), jira_params).mappings().all()
     jira_by_account: dict[str, dict] = {
         r["account_id"]: {
             "done": float(r["sprint_done_pts"] or 0) + float(r["done_pts"] or 0),
