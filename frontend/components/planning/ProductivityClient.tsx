@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -39,11 +39,19 @@ export function ProductivityClient({
   const [dateRange, setDateRange] = useState<DateRange>("90d");
   const [sortKey, setSortKey] = useState<SortKey>("commits");
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const mounted = useRef(false);
 
-  // Reload the rollup whenever the scope/sprint/date filters change.
   useEffect(() => {
+    // Skip the very first render — initialSummary already has 90d/overall data
+    // from the server. Only re-fetch when the user actually changes a filter.
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
     let cancelled = false;
     setLoading(true);
+    setFetchError(null);
     const opts =
       scope === "sprint" && sprintId !== ""
         ? { sprint_id: Number(sprintId) }
@@ -57,15 +65,13 @@ export function ProductivityClient({
         if (cancelled) return;
         setSummary(s);
         setCommitTrend(t);
-      } catch {
-        // leave previous data on error
+      } catch (err) {
+        if (!cancelled) setFetchError(err instanceof Error ? err.message : "Failed to load");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [scope, sprintId, dateRange]);
 
   const sorted = [...summary.developers].sort((a, b) => {
@@ -129,6 +135,7 @@ export function ProductivityClient({
           </select>
         )}
         {loading && <span className="text-xs text-muted-foreground">Updating…</span>}
+        {fetchError && <span className="text-xs text-destructive">{fetchError}</span>}
       </div>
 
       {/* Summary cards */}
