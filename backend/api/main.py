@@ -1678,6 +1678,39 @@ async def sprint_jira_tickets(sprint_id: int, db: Session = Depends(get_db)):
     ]
 
 
+@app.get("/productivity/jira-sprint/{jira_sprint_id}/flow")
+async def jira_sprint_flow(jira_sprint_id: int, db: Session = Depends(get_db)):
+    """Issue type breakdown + status transition flow for a Jira sprint."""
+    type_row = db.execute(text("""
+        SELECT meta->'type_counts' AS type_counts,
+               meta->'type_done' AS type_done,
+               meta->>'sprint_name' AS sprint_name
+        FROM metrics
+        WHERE source = 'jira'
+          AND metric_type = 'sprint_issue_types'
+          AND (meta->>'sprint_id')::int = :sid
+        ORDER BY timestamp DESC LIMIT 1
+    """), {"sid": jira_sprint_id}).mappings().first()
+
+    flow_row = db.execute(text("""
+        SELECT meta->'transitions' AS transitions,
+               meta->'avg_hours_per_status' AS avg_hours
+        FROM metrics
+        WHERE source = 'jira'
+          AND metric_type = 'sprint_status_transitions'
+          AND (meta->>'sprint_id')::int = :sid
+        ORDER BY timestamp DESC LIMIT 1
+    """), {"sid": jira_sprint_id}).mappings().first()
+
+    return {
+        "sprint_name": type_row["sprint_name"] if type_row else "",
+        "type_counts": type_row["type_counts"] if type_row else {},
+        "type_done": type_row["type_done"] if type_row else {},
+        "transitions": flow_row["transitions"] if flow_row else [],
+        "avg_hours_per_status": flow_row["avg_hours"] if flow_row else {},
+    }
+
+
 @app.get("/productivity/sprint-velocity")
 async def sprint_velocity_per_developer(db: Session = Depends(get_db)):
     """Per-developer allocated SP across sprints, for velocity trend chart."""

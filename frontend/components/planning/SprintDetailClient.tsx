@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { SprintHeader } from "./SprintHeader";
 import { AllocationTable } from "./AllocationTable";
 import { SummaryCards } from "./SummaryCards";
 import { SprintTaskMetrics } from "./SprintTaskMetrics";
 import { SprintJiraTickets } from "./SprintJiraTickets";
+import { SprintFlowDiagram } from "./SprintFlowDiagram";
 import {
   updateSprint,
   createAllocation,
@@ -30,6 +31,7 @@ interface SprintDetailClientProps {
 export function SprintDetailClient({ initialSprint, resources }: SprintDetailClientProps) {
   const [sprint, setSprint] = useState<SprintDetail>(initialSprint);
   const [error, setError] = useState<string | null>(null);
+  const [selectedJiraSprint, setSelectedJiraSprint] = useState<number | null>(null);
 
   const refresh = () => {
     // For tasks and new allocations we reload the page to keep state simple.
@@ -156,7 +158,14 @@ export function SprintDetailClient({ initialSprint, resources }: SprintDetailCli
 
       <SprintTaskMetrics allocations={sprint.allocations} />
 
-      <SprintJiraTickets sprintId={sprint.id} />
+      <SprintJiraTickets
+        sprintId={sprint.id}
+        onJiraSprintChange={setSelectedJiraSprint}
+      />
+
+      {selectedJiraSprint && (
+        <SprintFlowDiagram jiraSprintId={selectedJiraSprint} />
+      )}
 
       <AllocationTable
         allocations={sprint.allocations}

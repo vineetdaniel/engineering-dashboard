@@ -85,6 +85,7 @@ class JiraConnector(Connector):
             metrics.extend(await self._sprint_developer_points(project))
             metrics.extend(await self._developer_open_story_points(project))
             metrics.extend(await self._backlog_points(project))
+            metrics.extend(await self._sprint_issue_flow(project))
         return metrics
 
     async def fetch_events(self) -> List[Dict[str, Any]]:
@@ -250,6 +251,135 @@ class JiraConnector(Connector):
                         },
                         "timestamp": dt.datetime.utcnow().isoformat(),
                     })
+        return metrics
+
+    async def _sprint_issue_flow(self, project: str) -> List[Dict[str, Any]]:
+        """Fetch issue type breakdown and status-transition changelog for active + last 3 closed sprints."""
+        metrics: List[Dict[str, Any]] = []
+        async with httpx.AsyncClient() as client:
+            boards_url = f"{self.server.rstrip('/')}/rest/agile/1.0/board"
+            r = await self._jira_get(client, boards_url, params={"projectKeyOrId": project})
+            if r.status_code != 200:
+                return metrics
+            boards = r.json().get("values", [])
+            if not boards:
+                return metrics
+            board_id = boards[0].get("id")
+            if not board_id:
+                return metrics
+
+            sprints_url = f"{self.server.rstrip('/')}/rest/agile/1.0/board/{board_id}/sprint"
+            sprints: List[Dict[str, Any]] = []
+            for state in ("active", "closed"):
+                r = await self._jira_get(client, sprints_url, params={"state": state})
+                if r.status_code != 200:
+                    continue
+                values = r.json().get("values", [])
+                if state == "closed":
+                    values = sorted(values, key=lambda s: s.get("id", 0), reverse=True)[:3]
+                sprints.extend(values)
+
+            for sprint in sprints:
+                sprint_id = sprint.get("id")
+                sprint_name = sprint.get("name", "Sprint")
+                issue_url = f"{self.server.rstrip('/')}/rest/agile/1.0/sprint/{sprint_id}/issue"
+
+                # Fetch with changelog expansion + issuetype field
+                r = await self._jira_get(client, issue_url, params={
+                    "fields": f"status,issuetype,assignee,{self.story_points_field},created",
+                    "expand": "changelog",
+                    "maxResults": 200,
+                })
+                if r.status_code != 200:
+                    continue
+
+                issues = r.json().get("issues", [])
+                type_counts: Dict[str, int] = defaultdict(int)
+                type_done: Dict[str, int] = defaultdict(int)
+                # Transition: from_status -> to_status -> count
+                transitions: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+                # Time in each status per issue (avg later)
+                status_durations: Dict[str, List[float]] = defaultdict(list)
+
+                for issue in issues:
+                    fields = issue.get("fields", {})
+                    issue_type = (fields.get("issuetype") or {}).get("name", "Unknown")
+                    status_cat = (fields.get("status", {}).get("statusCategory", {}).get("key") or "")
+                    type_counts[issue_type] += 1
+                    if status_cat == "done":
+                        type_done[issue_type] += 1
+
+                    # Parse changelog for status transitions
+                    changelog = issue.get("changelog", {}).get("histories", [])
+                    created_str = fields.get("created", "")
+                    prev_status = "To Do"
+                    prev_time_str = created_str
+
+                    for history in sorted(changelog, key=lambda h: h.get("created", "")):
+                        for item in history.get("items", []):
+                            if item.get("field") != "status":
+                                continue
+                            from_s = item.get("fromString", prev_status)
+                            to_s = item.get("toString", "")
+                            ts = history.get("created", "")
+                            transitions[from_s][to_s] += 1
+
+                            # Duration in from_s
+                            try:
+                                t0 = dt.datetime.fromisoformat(prev_time_str.replace("Z", "+00:00"))
+                                t1 = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                hours = (t1 - t0).total_seconds() / 3600
+                                if 0 < hours < 24 * 60:  # sanity: ignore >60 days
+                                    status_durations[from_s].append(hours)
+                            except Exception:
+                                pass
+                            prev_status = to_s
+                            prev_time_str = ts
+
+                now = dt.datetime.utcnow().isoformat()
+
+                # Emit type breakdown metric
+                metrics.append({
+                    "source": "jira",
+                    "metric_type": "sprint_issue_types",
+                    "entity": project,
+                    "value": len(issues),
+                    "meta": {
+                        "sprint_id": sprint_id,
+                        "sprint_name": sprint_name,
+                        "project": project,
+                        "type_counts": dict(type_counts),
+                        "type_done": dict(type_done),
+                    },
+                    "timestamp": now,
+                })
+
+                # Emit transition flow metric
+                flat_transitions = [
+                    {"from": frm, "to": to, "count": cnt}
+                    for frm, tos in transitions.items()
+                    for to, cnt in tos.items()
+                ]
+                avg_durations = {
+                    status: round(sum(hrs) / len(hrs), 1)
+                    for status, hrs in status_durations.items() if hrs
+                }
+                if flat_transitions:
+                    metrics.append({
+                        "source": "jira",
+                        "metric_type": "sprint_status_transitions",
+                        "entity": project,
+                        "value": len(issues),
+                        "meta": {
+                            "sprint_id": sprint_id,
+                            "sprint_name": sprint_name,
+                            "project": project,
+                            "transitions": flat_transitions,
+                            "avg_hours_per_status": avg_durations,
+                        },
+                        "timestamp": now,
+                    })
+
         return metrics
 
     async def _developer_open_story_points(self, project: str) -> List[Dict[str, Any]]:

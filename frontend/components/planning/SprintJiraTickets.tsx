@@ -35,7 +35,7 @@ interface JiraSprintDetail {
   }[];
 }
 
-export function SprintJiraTickets({ sprintId }: { sprintId: number }) {
+export function SprintJiraTickets({ sprintId, onJiraSprintChange }: { sprintId: number; onJiraSprintChange?: (id: number | null) => void }) {
   const [planRows, setPlanRows] = useState<JiraRow[]>([]);
   const [jiraSprints, setJiraSprints] = useState<JiraSprint[]>([]);
   const [selectedJiraSprint, setSelectedJiraSprint] = useState<number | null>(null);
@@ -89,7 +89,11 @@ export function SprintJiraTickets({ sprintId }: { sprintId: number }) {
           <span className="text-xs text-muted-foreground">Jira sprint:</span>
           <select
             value={selectedJiraSprint ?? ""}
-            onChange={(e) => setSelectedJiraSprint(e.target.value ? Number(e.target.value) : null)}
+            onChange={(e) => {
+              const val = e.target.value ? Number(e.target.value) : null;
+              setSelectedJiraSprint(val);
+              onJiraSprintChange?.(val);
+            }}
             className="h-8 rounded-lg border border-input bg-background px-2 text-xs"
           >
             <option value="">— resource-mapped view —</option>
