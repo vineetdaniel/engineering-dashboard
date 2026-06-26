@@ -103,6 +103,7 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
     name: string;
     start_date: string | null;
     end_date: string | null;
+    target_sprint_id: number | null;
   }) => {
     if (!allocation) return;
     setLoading(true);
@@ -131,6 +132,7 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
       name: meta.name,
       start_date: meta.start_date,
       end_date: meta.end_date,
+      target_sprint_id: meta.target_sprint_id,
       allocations,
     });
 
@@ -143,7 +145,12 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
   };
 
   const handleConfirmSprint = async (
-    meta: { name: string; start_date: string | null; end_date: string | null },
+    meta: {
+      name: string;
+      start_date: string | null;
+      end_date: string | null;
+      target_sprint_id: number | null;
+    },
     payloadTasks: ImportSprintPlanPayload["tasks"]
   ) => {
     if (!sprintPlan) return;
@@ -154,6 +161,7 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
       name: meta.name,
       start_date: meta.start_date,
       end_date: meta.end_date,
+      target_sprint_id: meta.target_sprint_id,
       tasks: payloadTasks,
     });
 

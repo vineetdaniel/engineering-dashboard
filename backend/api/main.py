@@ -594,6 +594,128 @@ async def save_connector(name: str, payload: Dict[str, Any], db: Session = Depen
     }
 
 
+def _coerce_dt(value: Any, default: datetime | None = None) -> datetime:
+    """Normalize a connector-supplied timestamp (ISO string or datetime) to a
+    naive UTC datetime so it can be used as part of an upsert natural key."""
+    if isinstance(value, datetime):
+        dt_val = value
+    elif isinstance(value, str) and value.strip():
+        raw = value.strip().replace("Z", "+00:00")
+        try:
+            dt_val = datetime.fromisoformat(raw)
+        except ValueError:
+            return default or datetime.utcnow()
+    else:
+        return default or datetime.utcnow()
+    # Drop tzinfo to match the naive DateTime column.
+    if dt_val.tzinfo is not None:
+        dt_val = dt_val.replace(tzinfo=None)
+    return dt_val
+
+
+def _upsert_metrics(db: Session, metrics: list[dict[str, Any]]) -> dict[str, int]:
+    """Upsert metrics by natural key (source, metric_type, entity, timestamp).
+
+    New keys are inserted; existing rows are updated only when a value actually
+    changed. Nothing is ever deleted, so historical time-series are preserved.
+    """
+    inserted = updated = unchanged = 0
+    for m in metrics:
+        ts = _coerce_dt(m.get("timestamp"))
+        existing = (
+            db.query(Metric)
+            .filter(
+                Metric.source == m["source"],
+                Metric.metric_type == m["metric_type"],
+                Metric.entity == m.get("entity"),
+                Metric.timestamp == ts,
+            )
+            .first()
+        )
+        if existing is None:
+            db.add(Metric(
+                source=m["source"],
+                metric_type=m["metric_type"],
+                entity=m.get("entity"),
+                value=m.get("value"),
+                value_text=m.get("value_text"),
+                meta=m.get("meta") or {},
+                timestamp=ts,
+                is_seed=False,
+            ))
+            inserted += 1
+            continue
+
+        new_value = m.get("value")
+        new_text = m.get("value_text")
+        new_meta = m.get("meta") or {}
+        if (
+            existing.value == new_value
+            and existing.value_text == new_text
+            and existing.meta == new_meta
+            and existing.is_seed is False
+        ):
+            unchanged += 1
+            continue
+
+        existing.value = new_value
+        existing.value_text = new_text
+        existing.meta = new_meta
+        existing.is_seed = False
+        updated += 1
+    return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
+
+
+def _upsert_events(db: Session, events: list[dict[str, Any]]) -> dict[str, int]:
+    """Upsert events by natural key (source, event_type, entity, title,
+    happened_at). Insert new, update changed (status/severity/meta), never delete."""
+    inserted = updated = unchanged = 0
+    for e in events:
+        ts = _coerce_dt(e.get("happened_at"))
+        existing = (
+            db.query(Event)
+            .filter(
+                Event.source == e["source"],
+                Event.event_type == e["event_type"],
+                Event.entity == e.get("entity"),
+                Event.title == e["title"],
+                Event.happened_at == ts,
+            )
+            .first()
+        )
+        if existing is None:
+            db.add(Event(
+                source=e["source"],
+                event_type=e["event_type"],
+                entity=e.get("entity"),
+                title=e["title"],
+                severity=e.get("severity"),
+                status=e.get("status"),
+                meta=e.get("meta") or {},
+                happened_at=ts,
+                is_seed=False,
+            ))
+            inserted += 1
+            continue
+
+        new_meta = e.get("meta") or {}
+        if (
+            existing.severity == e.get("severity")
+            and existing.status == e.get("status")
+            and existing.meta == new_meta
+            and existing.is_seed is False
+        ):
+            unchanged += 1
+            continue
+
+        existing.severity = e.get("severity")
+        existing.status = e.get("status")
+        existing.meta = new_meta
+        existing.is_seed = False
+        updated += 1
+    return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
+
+
 @app.post("/sync/{source}")
 async def sync_source(source: str, db: Session = Depends(get_db)):
     if source not in CONNECTORS:
@@ -614,14 +736,25 @@ async def sync_source(source: str, db: Session = Depends(get_db)):
         if cost_per_txn:
             metrics.append(cost_per_txn)
 
-    # Remove any previous data for this source (seed or real) so each sync is idempotent.
-    db.query(Metric).filter(Metric.source == source).delete(synchronize_session=False)
-    db.query(Event).filter(Event.source == source).delete(synchronize_session=False)
+    # Clear only disposable SEED placeholder rows for this source on a real
+    # sync (seed uses historical timestamps that real syncs won't reproduce, so
+    # without this they'd coexist and pollute charts). Real/synced history is
+    # never deleted. Skip the purge if the connector returned nothing, so a
+    # transient empty fetch doesn't wipe the seed fallback.
+    if metrics:
+        db.query(Metric).filter(
+            Metric.source == source, Metric.is_seed.is_(True)
+        ).delete(synchronize_session=False)
+    if events:
+        db.query(Event).filter(
+            Event.source == source, Event.is_seed.is_(True)
+        ).delete(synchronize_session=False)
 
-    for m in metrics:
-        db.add(Metric(**{**m, "is_seed": False}))
-    for e in events:
-        db.add(Event(**{**e, "is_seed": False}))
+    # Upsert by natural key: insert new rows, update only changed ones, never
+    # delete real data. Historical time-series (trends, monthly spend, daily
+    # evidence) are preserved across syncs.
+    metric_stats = _upsert_metrics(db, metrics)
+    event_stats = _upsert_events(db, events)
 
     db.commit()
 
@@ -633,6 +766,8 @@ async def sync_source(source: str, db: Session = Depends(get_db)):
         "source": source,
         "metrics": len(metrics),
         "events": len(events),
+        "metrics_upsert": metric_stats,
+        "events_upsert": event_stats,
         "metric_breakdown": metric_breakdown,
         "event_breakdown": event_breakdown,
     }

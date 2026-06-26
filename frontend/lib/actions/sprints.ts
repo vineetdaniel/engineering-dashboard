@@ -104,6 +104,8 @@ export interface ImportPayload {
   name: string;
   start_date?: string | null;
   end_date?: string | null;
+  /** When set, attach to this existing sprint instead of matching/creating. */
+  target_sprint_id?: number | null;
   allocations: {
     team: string;
     resource: { name: string; role?: ResourceRole; default_hours_per_sprint?: number };
@@ -137,6 +139,8 @@ export interface ImportSprintPlanPayload {
   name: string;
   start_date?: string | null;
   end_date?: string | null;
+  /** When set, attach to this existing sprint instead of matching/creating. */
+  target_sprint_id?: number | null;
   tasks: SprintPlanTaskInput[];
 }
 
@@ -204,15 +208,30 @@ export interface SprintMatch {
 }
 
 /**
- * Resolve the target sprint for an import: reuse an existing sprint matched by
- * case-insensitive name, else create one from the parsed dates. Overlap is
- * validated only when creating a new sprint (an existing match is, by
- * definition, already the sprint these dates belong to).
+ * Resolve the target sprint for an import:
+ *  1. If `target_sprint_id` is given (PM chose to attach to an overlapping/
+ *     existing sprint), use it directly — no name match, no overlap check.
+ *  2. Else reuse an existing sprint matched by case-insensitive name.
+ *  3. Else create one from the parsed dates (overlap is blocked here so the PM
+ *     is forced to either fix the dates or explicitly attach via step 1).
  */
 async function findOrCreateSprint(
   runner: QueryRunner,
-  input: { name: string; start_date?: string | null; end_date?: string | null }
+  input: {
+    name: string;
+    start_date?: string | null;
+    end_date?: string | null;
+    target_sprint_id?: number | null;
+  }
 ): Promise<SprintMatch> {
+  if (input.target_sprint_id != null) {
+    const target = await runner.query<Sprint>("SELECT * FROM sprints WHERE id = $1", [
+      input.target_sprint_id,
+    ]);
+    if (!target.rows[0]) throw new Error("Selected sprint no longer exists.");
+    return { sprint: target.rows[0], matched: true };
+  }
+
   const name = input.name.trim();
   const existing = await runner.query<Sprint>(
     "SELECT * FROM sprints WHERE LOWER(name) = LOWER($1) ORDER BY id LIMIT 1",
@@ -228,6 +247,37 @@ async function findOrCreateSprint(
     [name, input.start_date || null, input.end_date || null]
   );
   return { sprint: created.rows[0], matched: false };
+}
+
+/**
+ * Detection helper for the import preview: returns sprints whose date range
+ * overlaps the given window (plus any name match), so the UI can offer an
+ * "Attach to {name}" action before the PM submits.
+ */
+export async function findSprintConflicts(input: {
+  name: string;
+  start_date?: string | null;
+  end_date?: string | null;
+}): Promise<ActionResult<{ nameMatch: Sprint | null; overlaps: Sprint[] }>> {
+  try {
+    const nameRow = await queryOne<Sprint>(
+      "SELECT * FROM sprints WHERE LOWER(name) = LOWER($1) ORDER BY id LIMIT 1",
+      [input.name.trim()]
+    );
+    let overlaps: Sprint[] = [];
+    if (input.start_date && input.end_date) {
+      overlaps = await query<Sprint>(
+        `SELECT * FROM sprints
+          WHERE start_date IS NOT NULL AND end_date IS NOT NULL
+            AND start_date <= $2 AND end_date >= $1
+          ORDER BY start_date`,
+        [input.start_date, input.end_date]
+      );
+    }
+    return { data: { nameMatch: nameRow, overlaps } };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
 }
 
 export async function listSprints(
@@ -633,6 +683,7 @@ export async function importAllocation(
         name: payload.name,
         start_date: payload.start_date,
         end_date: payload.end_date,
+        target_sprint_id: payload.target_sprint_id,
       });
 
       const resourceNameToId = new Map<string, number>();
@@ -773,6 +824,7 @@ export async function importSprintPlan(
         name: payload.name,
         start_date: payload.start_date,
         end_date: payload.end_date,
+        target_sprint_id: payload.target_sprint_id,
       });
 
       const newResources: string[] = [];

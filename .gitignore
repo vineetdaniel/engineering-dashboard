@@ -1,5 +1,6 @@
 # Env
 .env
+.env.bak*
 .env.local
 
 # Python

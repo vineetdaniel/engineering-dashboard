@@ -8,11 +8,17 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import type { ParsedSprintPlan } from "@/lib/excel/parser";
 import type { ImportSprintPlanPayload } from "@/lib/actions/sprints";
+import { SprintConflictNotice } from "./SprintConflictNotice";
 
 interface SprintImportPreviewProps {
   parsed: ParsedSprintPlan;
   onConfirm: (
-    meta: { name: string; start_date: string | null; end_date: string | null },
+    meta: {
+      name: string;
+      start_date: string | null;
+      end_date: string | null;
+      target_sprint_id: number | null;
+    },
     tasks: ImportSprintPlanPayload["tasks"]
   ) => void;
   onCancel: () => void;
@@ -30,6 +36,7 @@ export function SprintImportPreview({
   const [name, setName] = useState(parsed.name);
   const [startDate, setStartDate] = useState(parsed.start_date || "");
   const [endDate, setEndDate] = useState(parsed.end_date || "");
+  const [targetSprintId, setTargetSprintId] = useState<number | null>(null);
 
   const byOwner = parsed.tasks.reduce<Record<string, typeof parsed.tasks>>((acc, t) => {
     acc[t.owner] = acc[t.owner] || [];
@@ -40,7 +47,12 @@ export function SprintImportPreview({
 
   const handleConfirm = () => {
     onConfirm(
-      { name, start_date: startDate || null, end_date: endDate || null },
+      {
+        name,
+        start_date: startDate || null,
+        end_date: endDate || null,
+        target_sprint_id: targetSprintId,
+      },
       parsed.tasks.map((t) => ({
         owner: t.owner,
         title: t.title,
@@ -69,6 +81,14 @@ export function SprintImportPreview({
           <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
         </div>
       </div>
+
+      <SprintConflictNotice
+        name={name}
+        startDate={startDate}
+        endDate={endDate}
+        value={targetSprintId}
+        onChange={({ targetSprintId }) => setTargetSprintId(targetSprintId)}
+      />
 
       <div className="space-y-3">
         <p className="text-sm font-medium">
@@ -137,7 +157,7 @@ export function SprintImportPreview({
           Cancel
         </Button>
         <Button onClick={handleConfirm} disabled={loading || parsed.tasks.length === 0}>
-          {loading ? "Importing..." : "Confirm import"}
+          {loading ? "Importing..." : targetSprintId != null ? "Attach & import" : "Confirm import"}
         </Button>
       </div>
     </div>

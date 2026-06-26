@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import type { ParsedAllocation } from "@/lib/excel/parser";
+import { SprintConflictNotice } from "./SprintConflictNotice";
 
 interface ImportPreviewProps {
   parsed: ParsedAllocation;
@@ -14,6 +15,7 @@ interface ImportPreviewProps {
     name: string;
     start_date: string | null;
     end_date: string | null;
+    target_sprint_id: number | null;
   }) => void;
   onCancel: () => void;
   error?: string | null;
@@ -24,6 +26,7 @@ export function ImportPreview({ parsed, onConfirm, onCancel, error, loading }: I
   const [name, setName] = useState(parsed.name);
   const [startDate, setStartDate] = useState(parsed.start_date || "");
   const [endDate, setEndDate] = useState(parsed.end_date || "");
+  const [targetSprintId, setTargetSprintId] = useState<number | null>(null);
 
   const grouped = parsed.resources.reduce<Record<string, typeof parsed.resources>>((acc, r) => {
     acc[r.team] = acc[r.team] || [];
@@ -49,6 +52,14 @@ export function ImportPreview({ parsed, onConfirm, onCancel, error, loading }: I
           <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
         </div>
       </div>
+
+      <SprintConflictNotice
+        name={name}
+        startDate={startDate}
+        endDate={endDate}
+        value={targetSprintId}
+        onChange={({ targetSprintId }) => setTargetSprintId(targetSprintId)}
+      />
 
       <div className="space-y-3">
         <p className="text-sm font-medium">
@@ -118,10 +129,17 @@ export function ImportPreview({ parsed, onConfirm, onCancel, error, loading }: I
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onCancel} disabled={loading}>Cancel</Button>
         <Button
-          onClick={() => onConfirm({ name, start_date: startDate || null, end_date: endDate || null })}
+          onClick={() =>
+            onConfirm({
+              name,
+              start_date: startDate || null,
+              end_date: endDate || null,
+              target_sprint_id: targetSprintId,
+            })
+          }
           disabled={loading}
         >
-          {loading ? "Importing..." : "Confirm import"}
+          {loading ? "Importing..." : targetSprintId != null ? "Attach & import" : "Confirm import"}
         </Button>
       </div>
     </div>
