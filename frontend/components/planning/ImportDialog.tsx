@@ -16,6 +16,7 @@ import {
   parseSprintFile,
   FileTypeMismatchError,
   type ParsedAllocation,
+  type ParsedResource,
   type ParsedSprintPlan,
   type PlanningFileType,
 } from "@/lib/excel/parser";
@@ -104,12 +105,13 @@ export function ImportDialog({ expectedType, onImported, triggerLabel }: ImportD
     start_date: string | null;
     end_date: string | null;
     target_sprint_id: number | null;
+    resources: ParsedResource[];
   }) => {
     if (!allocation) return;
     setLoading(true);
     setError(null);
 
-    const allocations: ImportPayload["allocations"] = allocation.resources.map((r) => ({
+    const allocations: ImportPayload["allocations"] = meta.resources.map((r) => ({
       team: r.team,
       resource: { name: r.name, default_hours_per_sprint: r.standard_hours },
       story_points: r.story_points,

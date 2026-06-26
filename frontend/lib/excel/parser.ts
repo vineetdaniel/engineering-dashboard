@@ -86,6 +86,47 @@ function parseLeaves(value: string | number | null | undefined): number {
   return match ? Number(match[1]) : 0;
 }
 
+/**
+ * Known team names. A name-only row (no SP/hours) that matches one of these is
+ * a TEAM HEADER; any other name-only row is treated as a PERSON and imported
+ * with zero capacity (never skipped). Maps recognized variants to a canonical
+ * team label. Matching is case-insensitive and ignores spaces / slashes.
+ */
+const _TEAM_CANONICAL: Record<string, string> = {
+  backend: "Backend",
+  frontend: "Frontend",
+  web: "Frontend",
+  webfrontend: "Frontend",
+  devops: "DevOps",
+  qa: "QA",
+  integration: "Integrations",
+  integrations: "Integrations",
+  platform: "Platform",
+  core: "CORE",
+  paymeapp: "Payme App",
+};
+
+/** Canonical team labels for UI dropdowns (deduped, in a sensible order). */
+export const KNOWN_TEAMS = [
+  "Backend",
+  "Frontend",
+  "DevOps",
+  "QA",
+  "Integrations",
+  "Platform",
+  "CORE",
+  "Payme App",
+];
+
+function _teamKey(name: string): string {
+  return name.toLowerCase().replace(/[\s/_-]+/g, "");
+}
+
+/** Return the canonical team label if `name` is a known team, else null. */
+function matchKnownTeam(name: string): string | null {
+  return _TEAM_CANONICAL[_teamKey(name)] ?? null;
+}
+
 function detectCategory(title: string): TaskCategory {
   const lower = title.toLowerCase();
   if (
@@ -200,22 +241,13 @@ export function parseAllocationFile(buffer: ArrayBuffer): ParsedAllocation {
 
   const startRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 2;
 
-  // Track whether we just crossed a blank separator without seeing a team
-  // header. In the reference file a blank row separates teams but the second
-  // block ("Web / Frontend") has no header row, so those resources must NOT
-  // inherit the previous team — flag them for the PM to assign.
-  let sawBlankSinceTeamHeader = false;
-
   for (let i = startRow; i < data1.length; i++) {
     const row = data1[i];
     if (!row) continue;
     const name = normalizeName(String(row[0] || ""));
-    if (!name) {
-      sawBlankSinceTeamHeader = true;
-      continue;
-    }
+    if (!name) continue; // blank row → just a separator
 
-    // Skip known header values
+    // Skip the literal header label only.
     if (name.toLowerCase() === "name") continue;
 
     const spRaw = row[1];
@@ -236,21 +268,26 @@ export function parseAllocationFile(buffer: ArrayBuffer): ParsedAllocation {
       !dependencies &&
       !remarks;
 
-    // Team headers (Backend, Payme App) and orphaned no-data rows (Avinash
-    // Kumar) are structurally identical — both are name-only. The only signal
-    // is the blank separator: a name-only row that directly follows a blank
-    // row is an orphaned resource (warn + skip), NOT a team header. The next
-    // resource block then has no team of its own and falls to "Unassigned".
+    // A name-only row is a TEAM HEADER only when it matches the known team list
+    // (Backend, Frontend, DevOps, QA, Integrations, Platform, CORE, Payme App).
+    // Any other name-only row is a PERSON and is imported with zero capacity —
+    // nobody is ever skipped. People inherit the current team.
     if (isNameOnly) {
-      if (sawBlankSinceTeamHeader) {
-        warnings.push(`${name}: no capacity data, skipped (no team header followed)`);
-        // Resources after this orphan have no header → Unassigned.
-        currentTeam = "Unassigned";
-        // keep sawBlank true so the first real resource below is flagged
-      } else {
-        currentTeam = name;
-        sawBlankSinceTeamHeader = false;
+      const team = matchKnownTeam(name);
+      if (team) {
+        currentTeam = team;
+        continue;
       }
+      resources.push({
+        team: currentTeam,
+        name,
+        story_points: 0,
+        standard_hours: 0,
+        leave_days: 0,
+        dependencies,
+        remarks,
+        warnings: ["no capacity data — imported with zeros"],
+      });
       continue;
     }
 
@@ -261,22 +298,10 @@ export function parseAllocationFile(buffer: ArrayBuffer): ParsedAllocation {
     if (standardHours == null || Number.isNaN(standardHours)) {
       rowWarnings.push("missing standard hours");
     }
-    if (!storyPoints && !standardHours && !dependencies && !remarks) {
-      warnings.push(`${name} in ${currentTeam}: no data rows, skipped`);
-      sawBlankSinceTeamHeader = false;
-      continue;
-    }
 
-    // A resource block after a blank separator with no team header of its own
-    // is an implicit boundary — assign "Unassigned" and warn rather than
-    // silently bucketing it under the previous team.
-    let team = currentTeam;
-    if (sawBlankSinceTeamHeader) {
-      currentTeam = "Unassigned";
-      team = "Unassigned";
-      rowWarnings.push("no team header — assign team");
-      sawBlankSinceTeamHeader = false;
-    }
+    // Normalize the team to a canonical label if it happens to match a known
+    // team alias (e.g. a "Web" header earlier becomes "Frontend").
+    const team = matchKnownTeam(currentTeam) ?? currentTeam;
 
     resources.push({
       team,
