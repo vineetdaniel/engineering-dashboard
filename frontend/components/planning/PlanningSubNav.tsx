@@ -4,7 +4,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 interface PlanningSubNavProps {
-  active: "sprints" | "resources" | "productivity";
+  active: "sprints" | "resources" | "productivity" | "personas";
 }
 
 export function PlanningSubNav({ active }: PlanningSubNavProps) {
@@ -12,6 +12,7 @@ export function PlanningSubNav({ active }: PlanningSubNavProps) {
     { id: "sprints", label: "Sprints", href: "/sprints" },
     { id: "resources", label: "Resources", href: "/resources" },
     { id: "productivity", label: "Productivity", href: "/productivity" },
+    { id: "personas", label: "Personas", href: "/personas" },
   ];
 
   return (

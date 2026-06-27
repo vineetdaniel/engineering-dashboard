@@ -157,3 +157,49 @@ export interface SprintVelocityData {
 }
 export const getSprintVelocity = (): Promise<SprintVelocityData> =>
   api("/productivity/sprint-velocity");
+
+export interface DeveloperSignal {
+  name: string;
+  team: string | null;
+  role: string | null;
+  github_handle: string | null;
+  jira_account_id: string | null;
+  // commit
+  commits: number;
+  lines_added: number;
+  lines_deleted: number;
+  repos_touched: number;
+  peak_hour_ist: number | null;
+  peak_dow: number | null;
+  weekend_pct: number;
+  after_hours_pct: number;
+  // PR
+  prs_authored: number;
+  prs_merged: number;
+  prs_reviewed: number;
+  prs_gated: number;
+  avg_merge_hours: number | null;
+  feature_prs: number;
+  fix_prs: number;
+  refactor_prs: number;
+  bug_ratio_pct: number | null;
+  prs_with_concerns: number;
+  prs_changes_requested: number;
+  prs_with_reviews: number;
+  concern_ratio_pct: number;
+  // Jira
+  sprints_participated: number;
+  total_sp_committed: number;
+  total_sp_delivered: number;
+  delivery_rate_pct: number | null;
+  total_tickets_done: number;
+  open_issues: number;
+  done_issues_90d: number;
+  // Planning
+  sprints_allocated: number;
+  total_alloc_sp: number;
+  total_eff_hours: number;
+}
+
+export const getDeveloperSignals = (): Promise<DeveloperSignal[]> =>
+  api("/productivity/developer-signals");
