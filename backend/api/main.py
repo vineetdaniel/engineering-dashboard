@@ -1678,6 +1678,204 @@ async def sprint_jira_tickets(sprint_id: int, db: Session = Depends(get_db)):
     ]
 
 
+@app.get("/productivity/developer-signals")
+async def developer_signals(db: Session = Depends(get_db)):
+    """All persona-building signals per developer, computed from existing DB data."""
+
+    # --- GitHub commit signals ---
+    commit_rows = db.execute(text("""
+        SELECT
+            LOWER(TRIM(meta->>'author_login')) AS login,
+            MAX(meta->>'author_name') AS display_name,
+            COUNT(*)::int AS commits,
+            COALESCE(SUM((meta->>'additions')::int), 0)::int AS lines_added,
+            COALESCE(SUM((meta->>'deletions')::int), 0)::int AS lines_deleted,
+            COUNT(DISTINCT meta->>'repo')::int AS repos_touched,
+            -- Peak hour in IST (UTC+5:30 = UTC+330 minutes)
+            MODE() WITHIN GROUP (ORDER BY
+                EXTRACT(HOUR FROM (timestamp AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes'))
+            )::int AS peak_hour_ist,
+            -- Peak day (0=Sun ... 6=Sat)
+            MODE() WITHIN GROUP (ORDER BY
+                EXTRACT(DOW FROM (timestamp AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes'))
+            )::int AS peak_dow,
+            -- Weekend commits ratio
+            ROUND(
+                COUNT(*) FILTER (WHERE EXTRACT(DOW FROM (timestamp AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')) IN (0,6))::numeric
+                / NULLIF(COUNT(*), 0) * 100
+            )::int AS weekend_pct,
+            -- After-hours (before 9am or after 7pm IST)
+            ROUND(
+                COUNT(*) FILTER (WHERE
+                    EXTRACT(HOUR FROM (timestamp AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')) < 9
+                    OR EXTRACT(HOUR FROM (timestamp AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')) >= 19
+                )::numeric / NULLIF(COUNT(*), 0) * 100
+            )::int AS after_hours_pct
+        FROM metrics
+        WHERE source = 'github' AND metric_type = 'commit'
+          AND meta->>'author_login' IS NOT NULL
+          AND TRIM(meta->>'author_login') <> ''
+          AND meta->>'author_login' NOT LIKE '%[bot]%'
+          AND meta->>'author_login' NOT LIKE '%dependabot%'
+        GROUP BY LOWER(TRIM(meta->>'author_login'))
+    """)).mappings().all()
+
+    # --- PR signals: authored, reviewed, merged, avg merge time, branch patterns ---
+    pr_rows = db.execute(text("""
+        SELECT
+            meta->>'author_login' AS login,
+            COUNT(*)::int AS prs_authored,
+            COUNT(*) FILTER (WHERE meta->>'merged_at' IS NOT NULL)::int AS prs_merged,
+            -- avg merge time in hours
+            ROUND(AVG(
+                CASE WHEN meta->>'merged_at' IS NOT NULL AND meta->>'created_at' IS NOT NULL
+                THEN EXTRACT(EPOCH FROM (
+                    (meta->>'merged_at')::timestamptz - (meta->>'created_at')::timestamptz
+                )) / 3600.0 END
+            )::numeric, 1) AS avg_merge_hours,
+            -- branch type counts
+            COUNT(*) FILTER (WHERE meta->>'branch' ~* 'feat|feature')::int AS feature_prs,
+            COUNT(*) FILTER (WHERE meta->>'branch' ~* 'fix|bug|hotfix|patch')::int AS fix_prs,
+            COUNT(*) FILTER (WHERE meta->>'branch' ~* 'refactor|clean|chore')::int AS refactor_prs,
+            -- bug fix PRs by title
+            COUNT(*) FILTER (WHERE title ~* 'fix|bug|hotfix|patch')::int AS bugfix_titles
+        FROM events
+        WHERE source = 'github' AND event_type = 'pull_request'
+          AND meta->>'author_login' IS NOT NULL
+          AND meta->>'author_login' NOT LIKE '%[bot]%'
+        GROUP BY meta->>'author_login'
+    """)).mappings().all()
+
+    # PRs reviewed BY this person
+    review_rows = db.execute(text("""
+        SELECT reviewer, COUNT(*)::int AS reviews_given
+        FROM (
+            SELECT jsonb_array_elements_text(meta::jsonb->'reviewer_logins') AS reviewer
+            FROM events
+            WHERE source = 'github' AND event_type = 'pull_request'
+              AND meta::jsonb->'reviewer_logins' IS NOT NULL
+        ) t
+        WHERE reviewer NOT LIKE '%[bot]%' AND reviewer NOT LIKE '%dependabot%'
+        GROUP BY reviewer
+    """)).mappings().all()
+
+    # PRs merged by this person (gate-keeping role)
+    gate_rows = db.execute(text("""
+        SELECT meta->>'merged_by_login' AS login, COUNT(*)::int AS prs_gated
+        FROM events
+        WHERE source = 'github' AND event_type = 'pull_request'
+          AND meta->>'merged_by_login' IS NOT NULL
+          AND meta->>'merged_by_login' NOT LIKE '%[bot]%'
+        GROUP BY meta->>'merged_by_login'
+    """)).mappings().all()
+
+    # --- Jira signals: delivery rate, bug ratio, sprint consistency ---
+    jira_rows = db.execute(text("""
+        SELECT
+            meta->>'assignee_login' AS account_id,
+            MAX(meta->>'assignee_name') AS display_name,
+            COUNT(DISTINCT (meta->>'sprint_id')::int)::int AS sprints_participated,
+            COALESCE(SUM(value)::float, 0) AS total_sp_committed,
+            COALESCE(SUM((meta->>'completed_points')::float), 0) AS total_sp_delivered,
+            COALESCE(SUM((meta->>'done_count')::int), 0)::int AS total_tickets_done
+        FROM metrics
+        WHERE source = 'jira' AND metric_type = 'sprint_points_per_developer'
+          AND meta->>'assignee_login' IS NOT NULL
+        GROUP BY meta->>'assignee_login'
+    """)).mappings().all()
+
+    # Open issues per person
+    open_rows = db.execute(text("""
+        SELECT meta->>'assignee_login' AS account_id,
+               COALESCE(SUM((meta->>'issue_count')::int), 0)::int AS open_issues,
+               COALESCE(MAX((meta->>'done_count')::int), 0)::int AS done_issues_90d
+        FROM metrics
+        WHERE source = 'jira' AND metric_type = 'developer_open_story_points'
+        GROUP BY meta->>'assignee_login'
+    """)).mappings().all()
+
+    # --- Resource mapping (planning) ---
+    resource_rows = db.execute(text("""
+        SELECT r.name, r.team, r.role, r.github_handle, r.jira_account_id,
+               r.default_hours_per_sprint,
+               COUNT(DISTINCT a.sprint_id)::int AS sprints_allocated,
+               COALESCE(SUM(a.story_points), 0)::float AS total_alloc_sp,
+               COALESCE(SUM(a.effective_hours), 0)::float AS total_eff_hours
+        FROM resources r
+        LEFT JOIN sprint_allocations a ON a.resource_id = r.id
+        WHERE r.is_active = true
+        GROUP BY r.id, r.name, r.team, r.role, r.github_handle, r.jira_account_id, r.default_hours_per_sprint
+    """)).mappings().all()
+
+    # Build lookup maps
+    commit_map = {r["login"]: r for r in commit_rows}
+    pr_map = {r["login"]: r for r in pr_rows}
+    review_map = {r["reviewer"]: r["reviews_given"] for r in review_rows}
+    gate_map = {r["login"]: r["prs_gated"] for r in gate_rows}
+    jira_map = {r["account_id"]: r for r in jira_rows}
+    open_map = {r["account_id"]: r for r in open_rows}
+
+    result = []
+    for res in resource_rows:
+        gh = (res["github_handle"] or "").lower()
+        jira_id = res["jira_account_id"] or ""
+
+        c = commit_map.get(gh) or {}
+        p = pr_map.get(gh) or {}
+        j = jira_map.get(jira_id) or {}
+        o = open_map.get(jira_id) or {}
+
+        total_sp_committed = float(j.get("total_sp_committed") or 0)
+        total_sp_delivered = float(j.get("total_sp_delivered") or 0)
+        delivery_rate = round(total_sp_delivered / total_sp_committed * 100, 1) if total_sp_committed > 0 else None
+
+        total_prs = int(p.get("prs_authored") or 0)
+        fix_prs = int(p.get("fix_prs") or 0) + int(p.get("bugfix_titles") or 0)
+        feature_prs = int(p.get("feature_prs") or 0)
+        bug_ratio = round(fix_prs / total_prs * 100, 1) if total_prs > 0 else None
+
+        result.append({
+            "name": res["name"],
+            "team": res["team"],
+            "role": res["role"],
+            "github_handle": res["github_handle"],
+            "jira_account_id": jira_id or None,
+            # Commit signals
+            "commits": int(c.get("commits") or 0),
+            "lines_added": int(c.get("lines_added") or 0),
+            "lines_deleted": int(c.get("lines_deleted") or 0),
+            "repos_touched": int(c.get("repos_touched") or 0),
+            "peak_hour_ist": int(c.get("peak_hour_ist") or 0) if c.get("peak_hour_ist") is not None else None,
+            "peak_dow": int(c.get("peak_dow") or 0) if c.get("peak_dow") is not None else None,
+            "weekend_pct": int(c.get("weekend_pct") or 0),
+            "after_hours_pct": int(c.get("after_hours_pct") or 0),
+            # PR signals
+            "prs_authored": total_prs,
+            "prs_merged": int(p.get("prs_merged") or 0),
+            "prs_reviewed": int(review_map.get(gh) or 0),
+            "prs_gated": int(gate_map.get(gh) or 0),
+            "avg_merge_hours": float(p.get("avg_merge_hours") or 0) if p.get("avg_merge_hours") is not None else None,
+            "feature_prs": feature_prs,
+            "fix_prs": fix_prs,
+            "refactor_prs": int(p.get("refactor_prs") or 0),
+            "bug_ratio_pct": bug_ratio,
+            # Jira signals
+            "sprints_participated": int(j.get("sprints_participated") or 0),
+            "total_sp_committed": total_sp_committed,
+            "total_sp_delivered": total_sp_delivered,
+            "delivery_rate_pct": delivery_rate,
+            "total_tickets_done": int(j.get("total_tickets_done") or 0),
+            "open_issues": int(o.get("open_issues") or 0),
+            "done_issues_90d": int(o.get("done_issues_90d") or 0),
+            # Planning signals
+            "sprints_allocated": int(res["sprints_allocated"] or 0),
+            "total_alloc_sp": float(res["total_alloc_sp"] or 0),
+            "total_eff_hours": float(res["total_eff_hours"] or 0),
+        })
+
+    return sorted(result, key=lambda x: -(x["commits"] + x["prs_authored"]))
+
+
 @app.get("/productivity/jira-sprint/{jira_sprint_id}/flow")
 async def jira_sprint_flow(jira_sprint_id: int, db: Session = Depends(get_db)):
     """Issue type breakdown + status transition flow for a Jira sprint."""
