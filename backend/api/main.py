@@ -1746,7 +1746,7 @@ async def developer_signals(db: Session = Depends(get_db)):
         GROUP BY meta->>'author_login'
     """)).mappings().all()
 
-    # PRs reviewed BY this person
+    # PRs reviewed BY this person + review outcomes
     review_rows = db.execute(text("""
         SELECT reviewer, COUNT(*)::int AS reviews_given
         FROM (
@@ -1758,6 +1758,20 @@ async def developer_signals(db: Session = Depends(get_db)):
         WHERE reviewer NOT LIKE '%[bot]%' AND reviewer NOT LIKE '%dependabot%'
         GROUP BY reviewer
     """)).mappings().all()
+
+    # PRs authored that had CHANGES_REQUESTED (concerns raised by reviewers)
+    concern_rows = db.execute(text("""
+        SELECT meta->>'author_login' AS login,
+               COUNT(*) FILTER (WHERE (meta::jsonb->>'had_concerns')::boolean = true)::int AS prs_with_concerns,
+               COUNT(*) FILTER (WHERE jsonb_array_length(COALESCE(meta::jsonb->'changes_requested', '[]'::jsonb)) > 0)::int AS prs_changes_requested,
+               COUNT(*) FILTER (WHERE (meta::jsonb->>'had_concerns') IS NOT NULL)::int AS prs_with_reviews
+        FROM events
+        WHERE source = 'github' AND event_type = 'pull_request'
+          AND meta->>'author_login' IS NOT NULL
+          AND meta->>'author_login' NOT LIKE '%[bot]%'
+        GROUP BY meta->>'author_login'
+    """)).mappings().all()
+    concern_map = {r["login"]: r for r in concern_rows}
 
     # PRs merged by this person (gate-keeping role)
     gate_rows = db.execute(text("""
@@ -1824,6 +1838,7 @@ async def developer_signals(db: Session = Depends(get_db)):
         p = pr_map.get(gh) or {}
         j = jira_map.get(jira_id) or {}
         o = open_map.get(jira_id) or {}
+        cr = concern_map.get(gh) or {}
 
         total_sp_committed = float(j.get("total_sp_committed") or 0)
         total_sp_delivered = float(j.get("total_sp_delivered") or 0)
@@ -1859,6 +1874,11 @@ async def developer_signals(db: Session = Depends(get_db)):
             "fix_prs": fix_prs,
             "refactor_prs": int(p.get("refactor_prs") or 0),
             "bug_ratio_pct": bug_ratio,
+            # Review quality signals
+            "prs_with_concerns": int(cr.get("prs_with_concerns") or 0),
+            "prs_changes_requested": int(cr.get("prs_changes_requested") or 0),
+            "prs_with_reviews": int(cr.get("prs_with_reviews") or 0),
+            "concern_ratio_pct": round(int(cr.get("prs_with_concerns") or 0) / max(int(cr.get("prs_with_reviews") or 1), 1) * 100, 1),
             # Jira signals
             "sprints_participated": int(j.get("sprints_participated") or 0),
             "total_sp_committed": total_sp_committed,

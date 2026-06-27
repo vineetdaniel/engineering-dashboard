@@ -271,6 +271,18 @@ class GitHubConnector(Connector):
                 for r in reviews
                 if r.get("user") and r["user"].get("login")
             })
+            # Aggregate review states: APPROVED, CHANGES_REQUESTED, COMMENTED
+            # Last state per reviewer wins (GitHub only counts the latest review per person)
+            review_states: Dict[str, str] = {}
+            for rv in sorted(reviews, key=lambda x: x.get("submitted_at", "")):
+                login = (rv.get("user") or {}).get("login")
+                state_val = rv.get("state", "")
+                if login and state_val in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED"):
+                    review_states[login] = state_val
+            approvals = [l for l, s in review_states.items() if s == "APPROVED"]
+            changes_requested = [l for l, s in review_states.items() if s == "CHANGES_REQUESTED"]
+            comments_only = [l for l, s in review_states.items() if s == "COMMENTED"]
+            had_concerns = len(changes_requested) > 0
 
             merged_by = pr.get("merged_by") or {}
             merged_at = pr.get("merged_at")
@@ -319,6 +331,10 @@ class GitHubConnector(Connector):
                 "branch": pr.get("head", {}).get("ref"),
                 "base_branch": pr.get("base", {}).get("ref"),
                 "reviewer_logins": reviewer_logins,
+                "approvals": approvals,
+                "changes_requested": changes_requested,
+                "comments_only": comments_only,
+                "had_concerns": had_concerns,
                 "merged_by_login": merged_by.get("login"),
                 "merged_by_name": merged_by.get("login"),
                 "created_at": pr.get("created_at"),
