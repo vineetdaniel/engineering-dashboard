@@ -28,6 +28,7 @@ export interface DeveloperPersona {
   scores: PersonaScore;
   color: string;
   icon: string;
+  darkText: boolean;
 }
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -105,15 +106,15 @@ function classify(s: DeveloperSignal, sc: PersonaScore): PersonaType {
   return "Emerging";
 }
 
-const PERSONA_META: Record<PersonaType, { tagline: string; color: string; icon: string }> = {
-  Anchor:      { tagline: "High delivery, trusted gatekeeper",      color: "from-indigo-500 to-violet-600",   icon: "⚓" },
-  Builder:     { tagline: "Feature-driven, high output",            color: "from-blue-500 to-cyan-500",       icon: "🏗️" },
-  Fixer:       { tagline: "Bug hunter, rework champion",            color: "from-amber-500 to-orange-500",    icon: "🔧" },
-  Reviewer:    { tagline: "Code quality guardian",                  color: "from-emerald-500 to-teal-500",    icon: "👁️" },
-  Overloaded:  { tagline: "High backlog, needs unblocking",         color: "from-red-500 to-rose-500",        icon: "⚠️" },
-  "Deep Worker": { tagline: "Large impactful changes, low noise",   color: "from-violet-500 to-purple-600",   icon: "🔬" },
-  Consistent:  { tagline: "Reliable, predictable delivery",         color: "from-green-500 to-emerald-500",   icon: "📈" },
-  Emerging:    { tagline: "Building momentum",                      color: "from-gray-400 to-slate-500",      icon: "🌱" },
+const PERSONA_META: Record<PersonaType, { tagline: string; color: string; icon: string; darkText?: boolean }> = {
+  Anchor:        { tagline: "High delivery, trusted gatekeeper",    color: "from-indigo-600 to-violet-700",   icon: "⚓" },
+  Builder:       { tagline: "Feature-driven, high output",          color: "from-blue-600 to-cyan-600",       icon: "🏗️" },
+  Fixer:         { tagline: "Bug hunter, rework champion",          color: "from-amber-600 to-orange-600",    icon: "🔧" },
+  Reviewer:      { tagline: "Code quality guardian",                color: "from-emerald-600 to-teal-600",    icon: "👁️" },
+  Overloaded:    { tagline: "High backlog, needs unblocking",       color: "from-red-600 to-rose-700",        icon: "⚠️" },
+  "Deep Worker": { tagline: "Large impactful changes, low noise",   color: "from-violet-600 to-purple-700",   icon: "🔬" },
+  Consistent:    { tagline: "Reliable, predictable delivery",       color: "from-green-600 to-emerald-700",   icon: "📈" },
+  Emerging:      { tagline: "Building momentum",                    color: "from-slate-500 to-slate-700",     icon: "🌱" },
 };
 
 function strengths(s: DeveloperSignal, type: PersonaType): string[] {
@@ -155,6 +156,7 @@ export function buildPersonas(signals: DeveloperSignal[]): DeveloperPersona[] {
       scores: sc,
       color: meta.color,
       icon: meta.icon,
+      darkText: meta.darkText ?? false,
     };
   });
 }

@@ -30,30 +30,30 @@ export function PersonaCard({ persona: p }: PersonaCardProps) {
       className="overflow-hidden cursor-pointer transition-shadow hover:shadow-lg"
       onClick={() => setExpanded((e) => !e)}
     >
-      {/* Gradient header */}
-      <div className={`bg-gradient-to-r ${p.color} p-4 text-white`}>
+      {/* Gradient header — always white text on dark-enough gradients */}
+      <div className={`bg-gradient-to-r ${p.color} p-4`}>
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-3">
             <span className="text-3xl">{p.icon}</span>
             <div>
-              <h3 className="text-base font-bold leading-tight">{s.name}</h3>
-              <p className="text-xs opacity-80">{s.team} · {s.role}</p>
+              <h3 className="text-base font-bold leading-tight text-white drop-shadow-sm">{s.name}</h3>
+              <p className="text-xs text-white/80">{s.team} · {s.role}</p>
             </div>
           </div>
           <div className="text-right">
-            <span className="rounded-full bg-white/20 px-2.5 py-1 text-xs font-bold backdrop-blur-sm">
+            <span className="rounded-full bg-black/20 px-2.5 py-1 text-xs font-bold text-white backdrop-blur-sm">
               {p.type}
             </span>
           </div>
         </div>
-        <p className="mt-2 text-xs opacity-90 italic">{p.tagline}</p>
+        <p className="mt-2 text-xs text-white/90 italic">{p.tagline}</p>
       </div>
 
       {/* Radar + key stats */}
       <div className="p-4">
         <div className="flex gap-4">
-          {/* Radar */}
-          <div className="h-36 w-36 shrink-0">
+          {/* Radar — hide for no-data cards */}
+          <div className={`h-36 w-36 shrink-0 ${p.type === "Emerging" && s.commits === 0 && s.prs_authored === 0 ? "opacity-20" : ""}`}>
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={radarData} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
                 <PolarGrid stroke="currentColor" className="text-muted-foreground/20" />
@@ -83,7 +83,15 @@ export function PersonaCard({ persona: p }: PersonaCardProps) {
             </ResponsiveContainer>
           </div>
 
-          {/* Key numbers */}
+          {/* Key numbers — show helpful message for Emerging with no data */}
+          {p.type === "Emerging" && s.commits === 0 && s.prs_authored === 0 ? (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-xs text-muted-foreground text-center leading-relaxed">
+                No GitHub or Jira data yet.<br />
+                Map GitHub handle &amp; Jira account<br />in Resources, then sync.
+              </p>
+            </div>
+          ) : (
           <div className="flex-1 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
             <Stat label="Commits" value={s.commits} />
             <Stat label="PRs authored" value={s.prs_authored} />
@@ -92,6 +100,7 @@ export function PersonaCard({ persona: p }: PersonaCardProps) {
             <Stat label="Delivery rate" value={s.delivery_rate_pct !== null ? `${s.delivery_rate_pct}%` : "—"} good={s.delivery_rate_pct !== null && s.delivery_rate_pct >= 80} />
             <Stat label="Concern ratio" value={`${s.concern_ratio_pct}%`} warn={s.concern_ratio_pct > 15} />
           </div>
+          )}
         </div>
 
         {/* Strengths / risks always visible */}
