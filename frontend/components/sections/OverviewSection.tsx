@@ -42,7 +42,7 @@ const bugData = [
   { label: "W4", value: 5 },
 ];
 
-export function OverviewSection({ settings, health, data, metrics, events, filters, onSync, syncLoading, lastUpdated, dataSource }: SectionProps) {
+export function OverviewSection({ settings, health, data, metrics, events, filters, onSync, syncLoading, lastUpdated, dataSource, healthLoading }: SectionProps) {
   const blockedRows: DataTableRow[] = data.blocked.map((e) => ({
     id: e.id,
     label: e.title,
@@ -99,6 +99,7 @@ export function OverviewSection({ settings, health, data, metrics, events, filte
         health={health}
         onSync={onSync}
         loading={syncLoading}
+        isLoading={healthLoading}
       />
 
       <ExecutiveSummary data={data} metrics={metrics} events={events} dataSource={dataSource} />

@@ -1,2 +1,5 @@
-import { PageLoader } from "@/components/PageLoader";
-export default function Loading() { return <PageLoader />; }
+import { DashboardSkeleton } from "@/components/DashboardSkeleton";
+
+export default function Loading() {
+  return <DashboardSkeleton />;
+}

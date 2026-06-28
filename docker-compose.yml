@@ -32,5 +32,21 @@ services:
     volumes:
       - ./backend:/app/backend
 
+  beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: celery -A backend.tasks.celery beat -l info --scheduler celery.beat.PersistentScheduler --schedulefile /tmp/celerybeat-schedule
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ctodash
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./backend:/app/backend
+
 volumes:
   postgres_data:

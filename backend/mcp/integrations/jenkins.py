@@ -212,13 +212,18 @@ class JenkinsConnector(Connector):
                 if "SUCCESS" in results and any(r in failed_results for r in results):
                     flaky_candidates += 1
 
+        # Deployment frequency: successful builds per day over the 30-day window.
+        window_days = 30
+        successful = [b for b in completed if b["result"] == "SUCCESS"]
+        deployment_frequency = round(len(successful) / window_days, 2) if completed else 0
+
         return [
             {
                 "source": "jenkins",
                 "metric_type": "change_failure_rate",
                 "entity": "jenkins",
                 "value": round(change_failure_rate, 2),
-                "meta": {"failed": len(failed), "total": len(completed), "window_days": 30},
+                "meta": {"failed": len(failed), "total": len(completed), "window_days": window_days},
                 "timestamp": now_iso,
             },
             {
@@ -226,7 +231,7 @@ class JenkinsConnector(Connector):
                 "metric_type": "mttr_minutes",
                 "entity": "jenkins",
                 "value": round(median_mttr, 2),
-                "meta": {"recoveries": len(recovery_minutes), "window_days": 30},
+                "meta": {"recoveries": len(recovery_minutes), "window_days": window_days},
                 "timestamp": now_iso,
             },
             {
@@ -234,7 +239,15 @@ class JenkinsConnector(Connector):
                 "metric_type": "flaky_tests",
                 "entity": "jenkins",
                 "value": flaky_candidates,
-                "meta": {"note": "jobs with same-day failure-then-success pattern", "window_days": 30},
+                "meta": {"note": "jobs with same-day failure-then-success pattern", "window_days": window_days},
+                "timestamp": now_iso,
+            },
+            {
+                "source": "jenkins",
+                "metric_type": "deployment_frequency",
+                "entity": "jenkins",
+                "value": deployment_frequency,
+                "meta": {"successful_builds": len(successful), "window_days": window_days},
                 "timestamp": now_iso,
             },
         ]

@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     JENKINS_USERNAME: str = ""
     JENKINS_API_KEY: str = ""
 
+    MIXPANEL_API_KEY: str = ""
+    MIXPANEL_API_SECRET: str = ""
+    MIXPANEL_PROJECT_ID: str = ""
+
     AWS_MONTHLY_BUDGET: str = ""
     AWS_COST_DELTA_THRESHOLD_PCT: str = "25"
     AWS_COST_CRITICAL_RISK_THRESHOLD_PCT: str = "50"

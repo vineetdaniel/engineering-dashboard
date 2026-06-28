@@ -2,7 +2,6 @@ export const dynamic = "force-dynamic";
 
 import {
   getSettings,
-  getConnectorHealth,
   getMetrics,
   getEvents,
 } from "@/lib/api";
@@ -24,7 +23,6 @@ export default async function Home({
   const filters = { dateRange };
 
   let settings: any = { observability_provider: "—" };
-  let health: any = { connectors: {} };
   let metrics: any[] = [];
   let events: any[] = [];
   let error: string | null = null;
@@ -43,14 +41,8 @@ export default async function Home({
     console.error("Dashboard SSR error:", err);
   }
 
-  // Connector health is fetched client-side because it can be slow (it calls
-  // external APIs). This keeps server rendering fast and resilient.
-  try {
-    health = await getConnectorHealth();
-  } catch (err) {
-    console.error("Dashboard SSR health error:", err);
-  }
-
+  // Connector health is intentionally fetched client-side in DashboardClient
+  // because it can be slow (it calls external APIs). Do NOT await it here.
   if (error) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center p-6">
@@ -72,7 +64,7 @@ export default async function Home({
   return (
     <DashboardClient
       settings={settings}
-      initialHealth={health}
+      initialHealth={null}
       initialMetrics={metrics}
       initialEvents={events}
     />

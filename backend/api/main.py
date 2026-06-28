@@ -393,6 +393,54 @@ _GUIDES: Dict[str, schemas.ConnectorGuideOut] = {
             ),
         ],
     ),
+    "mixpanel": schemas.ConnectorGuideOut(
+        name="mixpanel",
+        label="Mixpanel",
+        description="Connect Mixpanel to pull KYC, KYB, and payment conversion funnel metrics for the Payments section.",
+        docs_url="https://developer.mixpanel.com/reference/service-account",
+        fields=[
+            schemas.ConnectorGuideField(
+                key="MIXPANEL_API_KEY",
+                label="Mixpanel API key",
+                type="password",
+                required=True,
+                placeholder="9a8b7c6d...",
+                help="Project API key from Mixpanel → Organization Settings → API Credentials. Used with the API secret for Basic authentication.",
+                secret=True,
+            ),
+            schemas.ConnectorGuideField(
+                key="MIXPANEL_API_SECRET",
+                label="Mixpanel API secret",
+                type="password",
+                required=True,
+                placeholder="e8d7c6b5...",
+                help="Project API secret from Mixpanel → Organization Settings → API Credentials. Used as the Basic auth password with the API key.",
+                secret=True,
+            ),
+            schemas.ConnectorGuideField(
+                key="MIXPANEL_PROJECT_ID",
+                label="Mixpanel project ID",
+                type="text",
+                required=False,
+                placeholder="1234567",
+                help="Optional. Displayed in the connector status card only.",
+            ),
+        ],
+        steps=[
+            schemas.ConnectorGuideStep(
+                label="Open Mixpanel API credentials",
+                description="Go to Mixpanel → Organization Settings → API Credentials and create or copy an API key/secret pair with read access to project data.",
+            ),
+            schemas.ConnectorGuideStep(
+                label="Paste key and secret",
+                description="Add MIXPANEL_API_KEY and MIXPANEL_API_SECRET to the connector config. Both are stored server-side and masked in the UI.",
+            ),
+            schemas.ConnectorGuideStep(
+                label="Sync the connector",
+                description="Click Sync on the Mixpanel card. CTO Dash will auto-discover KYC, KYB, and payment events in your project and compute KYC pass rate, KYB pass rate, payment success rate, and transaction volume from the last 7 days of event counts.",
+            ),
+        ],
+    ),
     "observability": schemas.ConnectorGuideOut(
         name="observability",
         label="Observability",
@@ -717,6 +765,19 @@ def _upsert_events(db: Session, events: list[dict[str, Any]]) -> dict[str, int]:
         existing.is_seed = False
         updated += 1
     return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
+
+
+@app.get("/settings/connectors/{name}/events")
+async def connector_events(name: str, db: Session = Depends(get_db)):
+    """List project event names for connectors that support it (currently Mixpanel)."""
+    if name not in CONNECTORS:
+        raise HTTPException(status_code=404, detail=f"Unknown source: {name}")
+    if name != "mixpanel":
+        raise HTTPException(status_code=400, detail="Event listing is only supported for Mixpanel")
+    config = get_connector_config(name, db)
+    conn = CONNECTORS[name](config)
+    events = await conn.list_event_names()
+    return {"events": events}
 
 
 @app.post("/sync/{source}")
@@ -1681,6 +1742,11 @@ async def sprint_jira_tickets(sprint_id: int, db: Session = Depends(get_db)):
 @app.get("/productivity/developer-signals")
 async def developer_signals(db: Session = Depends(get_db)):
     """All persona-building signals per developer, computed from existing DB data."""
+    return _compute_developer_signals(db)
+
+
+def _compute_developer_signals(db: Session) -> list[dict]:
+    """Shared computation for list and single-developer endpoints."""
 
     # --- GitHub commit signals ---
     commit_rows = db.execute(text("""
@@ -1691,6 +1757,10 @@ async def developer_signals(db: Session = Depends(get_db)):
             COALESCE(SUM((meta->>'additions')::int), 0)::int AS lines_added,
             COALESCE(SUM((meta->>'deletions')::int), 0)::int AS lines_deleted,
             COUNT(DISTINCT meta->>'repo')::int AS repos_touched,
+            -- Commit branch type counts
+            COUNT(*) FILTER (WHERE meta->>'branch' ~* 'feat|feature')::int AS feature_commits,
+            COUNT(*) FILTER (WHERE meta->>'branch' ~* 'fix|bug|hotfix|patch')::int AS fix_commits,
+            COUNT(*) FILTER (WHERE meta->>'branch' ~* 'refactor|clean|chore')::int AS refactor_commits,
             -- Peak hour in IST (UTC+5:30 = UTC+330 minutes)
             MODE() WITHIN GROUP (ORDER BY
                 EXTRACT(HOUR FROM (timestamp AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes'))
@@ -1746,7 +1816,7 @@ async def developer_signals(db: Session = Depends(get_db)):
         GROUP BY meta->>'author_login'
     """)).mappings().all()
 
-    # PRs reviewed BY this person + review outcomes
+    # Total distinct PRs reviewed BY this person (any review state)
     review_rows = db.execute(text("""
         SELECT reviewer, COUNT(*)::int AS reviews_given
         FROM (
@@ -1756,6 +1826,31 @@ async def developer_signals(db: Session = Depends(get_db)):
               AND meta::jsonb->'reviewer_logins' IS NOT NULL
         ) t
         WHERE reviewer NOT LIKE '%[bot]%' AND reviewer NOT LIKE '%dependabot%'
+        GROUP BY reviewer
+    """)).mappings().all()
+
+    # Per-reviewer approval / changes-requested breakdown.
+    review_state_rows = db.execute(text("""
+        SELECT
+            reviewer,
+            COUNT(*) FILTER (WHERE state = 'APPROVED')::int AS approvals_given,
+            COUNT(*) FILTER (WHERE state = 'CHANGES_REQUESTED')::int AS changes_requested_given
+        FROM (
+            SELECT
+                jsonb_array_elements_text(meta::jsonb->'approvals') AS reviewer,
+                'APPROVED' AS state
+            FROM events
+            WHERE source = 'github' AND event_type = 'pull_request'
+              AND meta::jsonb->'approvals' IS NOT NULL
+            UNION ALL
+            SELECT
+                jsonb_array_elements_text(meta::jsonb->'changes_requested'),
+                'CHANGES_REQUESTED'
+            FROM events
+            WHERE source = 'github' AND event_type = 'pull_request'
+              AND meta::jsonb->'changes_requested' IS NOT NULL
+        ) t
+        WHERE reviewer IS NOT NULL AND reviewer NOT LIKE '%[bot]%' AND reviewer NOT LIKE '%dependabot%'
         GROUP BY reviewer
     """)).mappings().all()
 
@@ -1808,6 +1903,42 @@ async def developer_signals(db: Session = Depends(get_db)):
         GROUP BY meta->>'assignee_login'
     """)).mappings().all()
 
+    # --- WIP load: open PRs, drafts, and stuck PRs per author ---
+    wip_rows = db.execute(text("""
+        SELECT meta->>'author_login' AS login,
+               COUNT(*) FILTER (WHERE status = 'open')::int AS open_prs,
+               COUNT(*) FILTER (WHERE status = 'open' AND (meta::jsonb->>'is_draft')::boolean = true)::int AS draft_prs,
+               COUNT(*) FILTER (WHERE status = 'open' AND (meta::jsonb->>'created_at')::timestamptz < NOW() - INTERVAL '7 days')::int AS stuck_prs
+        FROM events
+        WHERE source = 'github' AND event_type = 'pull_request'
+          AND meta->>'author_login' IS NOT NULL
+          AND meta->>'author_login' NOT LIKE '%[bot]%'
+        GROUP BY meta->>'author_login'
+    """)).mappings().all()
+
+    # --- Sprint volatility: variance of committed vs delivered SP per developer ---
+    volatility_rows = db.execute(text("""
+        SELECT assignee_login AS account_id,
+               ROUND(STDDEV(delivery_ratio)::numeric, 1) AS sp_volatility,
+               ROUND(AVG(delivery_ratio)::numeric, 1) AS avg_delivery_ratio,
+               COUNT(*)::int AS measured_sprints
+        FROM (
+            SELECT
+                meta->>'assignee_login' AS assignee_login,
+                (meta->>'sprint_id')::int AS sprint_id,
+                CASE WHEN SUM(value) FILTER (WHERE value > 0) > 0
+                     THEN SUM((meta->>'completed_points')::float) / NULLIF(SUM(value)::float, 0) * 100
+                     ELSE 100
+                END AS delivery_ratio
+            FROM metrics
+            WHERE source = 'jira' AND metric_type = 'sprint_points_per_developer'
+              AND meta->>'assignee_login' IS NOT NULL
+            GROUP BY meta->>'assignee_login', (meta->>'sprint_id')::int
+        ) t
+        WHERE delivery_ratio IS NOT NULL
+        GROUP BY assignee_login
+    """)).mappings().all()
+
     # --- Resource mapping (planning) ---
     resource_rows = db.execute(text("""
         SELECT r.name, r.team, r.role, r.github_handle, r.jira_account_id,
@@ -1825,9 +1956,78 @@ async def developer_signals(db: Session = Depends(get_db)):
     commit_map = {r["login"]: r for r in commit_rows}
     pr_map = {r["login"]: r for r in pr_rows}
     review_map = {r["reviewer"]: r["reviews_given"] for r in review_rows}
+    review_state_map = {r["reviewer"]: r for r in review_state_rows}
     gate_map = {r["login"]: r["prs_gated"] for r in gate_rows}
     jira_map = {r["account_id"]: r for r in jira_rows}
     open_map = {r["account_id"]: r for r in open_rows}
+    wip_map = {r["login"]: r for r in wip_rows}
+    volatility_map = {r["account_id"]: r for r in volatility_rows}
+
+    # --- Bus factor: repos/files where dev is sole or dominant contributor ---
+    bus_rows = db.execute(text("""
+        WITH repo_commits AS (
+            SELECT LOWER(TRIM(meta->>'author_login')) AS login,
+                   meta->>'repo' AS repo,
+                   COUNT(*)::int AS commits
+            FROM metrics
+            WHERE source = 'github' AND metric_type = 'commit'
+              AND meta->>'author_login' IS NOT NULL
+              AND meta->>'repo' IS NOT NULL
+              AND meta->>'author_login' NOT LIKE '%[bot]%'
+              AND meta->>'author_login' NOT LIKE '%dependabot%'
+            GROUP BY LOWER(TRIM(meta->>'author_login')), meta->>'repo'
+        ),
+        repo_totals AS (
+            SELECT repo,
+                   SUM(commits)::int AS total_commits,
+                   COUNT(DISTINCT login)::int AS contributor_count
+            FROM repo_commits
+            GROUP BY repo
+        )
+        SELECT rc.login,
+               rc.repo,
+               rc.commits,
+               rt.total_commits,
+               rt.contributor_count,
+               ROUND(rc.commits::numeric / NULLIF(rt.total_commits, 0) * 100, 1) AS share_pct,
+               rc.commits = rt.total_commits AS sole_contributor
+        FROM repo_commits rc
+        JOIN repo_totals rt USING (repo)
+        WHERE rc.commits > 0
+        ORDER BY rc.login, share_pct DESC
+    """)).mappings().all()
+    bus_map: Dict[str, list[dict]] = {}
+    for r in bus_rows:
+        bus_map.setdefault(r["login"], []).append(r)
+
+    # --- Technical debt & hygiene from commit messages ---
+    hygiene_rows = db.execute(text("""
+        SELECT LOWER(TRIM(meta->>'author_login')) AS login,
+               COUNT(*)::int AS total_commits,
+               COUNT(*) FILTER (WHERE meta->>'message' ~* '\\m(TODO|FIXME|HACK|XXX|TEMP|BROKEN)\\M')::int AS debt_markers,
+               COUNT(*) FILTER (WHERE meta->>'message' ~* '^(feat|fix|refactor|docs|test|chore|style|perf|ci|build)\\s*[(|:]')::int AS conventional_commits,
+               ROUND(AVG(LENGTH(meta->>'message'))::numeric, 1) AS avg_message_length,
+               COUNT(*) FILTER (WHERE meta->>'message' ~* '^(Merge branch|Merge pull request|merge)\\y')::int AS merge_commits
+        FROM metrics
+        WHERE source = 'github' AND metric_type = 'commit'
+          AND meta->>'author_login' IS NOT NULL
+          AND meta->>'author_login' NOT LIKE '%[bot]%'
+        GROUP BY LOWER(TRIM(meta->>'author_login'))
+    """)).mappings().all()
+    hygiene_map = {r["login"]: r for r in hygiene_rows}
+
+    # --- Latest Jenkins DORA metrics ---
+    dora_rows = db.execute(text("""
+        SELECT DISTINCT ON (metric_type)
+               metric_type,
+               value,
+               timestamp
+        FROM metrics
+        WHERE source = 'jenkins'
+          AND metric_type IN ('change_failure_rate', 'mttr_minutes', 'flaky_tests', 'deployment_frequency')
+        ORDER BY metric_type, timestamp DESC
+    """)).mappings().all()
+    dora_map = {r["metric_type"]: r for r in dora_rows}
 
     result = []
     for res in resource_rows:
@@ -1839,6 +2039,43 @@ async def developer_signals(db: Session = Depends(get_db)):
         j = jira_map.get(jira_id) or {}
         o = open_map.get(jira_id) or {}
         cr = concern_map.get(gh) or {}
+        rs = review_state_map.get(gh) or {}
+        w = wip_map.get(gh) or {}
+        v = volatility_map.get(jira_id) or {}
+        b = bus_map.get(gh) or []
+        h = hygiene_map.get(gh) or {}
+
+        # Bus factor aggregates
+        top_repos = [
+            {
+                "repo": r["repo"],
+                "commits": r["commits"],
+                "total_commits": r["total_commits"],
+                "share_pct": float(r["share_pct"] or 0),
+                "sole_contributor": bool(r["sole_contributor"]),
+            }
+            for r in b
+        ]
+        sole_repos = [r for r in top_repos if r["sole_contributor"]]
+        dominant_repos = [r for r in top_repos if r["share_pct"] >= 50]
+        bus_factor_score = min(100, round(
+            len(sole_repos) * 15 + len(dominant_repos) * 5 + (max((r["share_pct"] for r in top_repos), default=0) / 100) * 20
+        ))
+
+        # Hygiene aggregates
+        total_commits_h = int(h.get("total_commits") or 0)
+        debt_markers = int(h.get("debt_markers") or 0)
+        conventional_commits = int(h.get("conventional_commits") or 0)
+        avg_message_length = float(h.get("avg_message_length") or 0) if h.get("avg_message_length") is not None else None
+        merge_commits = int(h.get("merge_commits") or 0)
+        conventional_pct = round(conventional_commits / max(total_commits_h, 1) * 100, 1)
+        debt_per_100 = round(debt_markers / max(total_commits_h, 1) * 100, 1)
+        # Hygiene score: reward conventional commits and reasonable message length, penalize merge commits and debt markers
+        hygiene_score = max(0, min(100, round(
+            conventional_pct * 0.6
+            + (100 - min(debt_per_100 * 5, 100)) * 0.25
+            + (100 - max(0, (merge_commits / max(total_commits_h, 1) * 100 - 10)) * 2) * 0.15
+        )))
 
         total_sp_committed = float(j.get("total_sp_committed") or 0)
         total_sp_delivered = float(j.get("total_sp_delivered") or 0)
@@ -1859,6 +2096,9 @@ async def developer_signals(db: Session = Depends(get_db)):
             "commits": int(c.get("commits") or 0),
             "lines_added": int(c.get("lines_added") or 0),
             "lines_deleted": int(c.get("lines_deleted") or 0),
+            "feature_commits": int(c.get("feature_commits") or 0),
+            "fix_commits": int(c.get("fix_commits") or 0),
+            "refactor_commits": int(c.get("refactor_commits") or 0),
             "repos_touched": int(c.get("repos_touched") or 0),
             "peak_hour_ist": int(c.get("peak_hour_ist") or 0) if c.get("peak_hour_ist") is not None else None,
             "peak_dow": int(c.get("peak_dow") or 0) if c.get("peak_dow") is not None else None,
@@ -1874,11 +2114,23 @@ async def developer_signals(db: Session = Depends(get_db)):
             "fix_prs": fix_prs,
             "refactor_prs": int(p.get("refactor_prs") or 0),
             "bug_ratio_pct": bug_ratio,
-            # Review quality signals
+            # WIP load signals
+            "open_prs": int(w.get("open_prs") or 0),
+            "draft_prs": int(w.get("draft_prs") or 0),
+            "stuck_prs": int(w.get("stuck_prs") or 0),
+            # Review quality signals (as author)
             "prs_with_concerns": int(cr.get("prs_with_concerns") or 0),
             "prs_changes_requested": int(cr.get("prs_changes_requested") or 0),
             "prs_with_reviews": int(cr.get("prs_with_reviews") or 0),
             "concern_ratio_pct": round(int(cr.get("prs_with_concerns") or 0) / max(int(cr.get("prs_with_reviews") or 1), 1) * 100, 1),
+            # Review quality signals (as reviewer)
+            "approvals_given": int(rs.get("approvals_given") or 0),
+            "changes_requested_given": int(rs.get("changes_requested_given") or 0),
+            "reviewer_changes_ratio_pct": round(
+                int(rs.get("changes_requested_given") or 0)
+                / max(int(rs.get("approvals_given") or 0) + int(rs.get("changes_requested_given") or 0), 1)
+                * 100, 1
+            ) if (int(rs.get("approvals_given") or 0) + int(rs.get("changes_requested_given") or 0)) > 0 else None,
             # Jira signals
             "sprints_participated": int(j.get("sprints_participated") or 0),
             "total_sp_committed": total_sp_committed,
@@ -1887,13 +2139,42 @@ async def developer_signals(db: Session = Depends(get_db)):
             "total_tickets_done": int(j.get("total_tickets_done") or 0),
             "open_issues": int(o.get("open_issues") or 0),
             "done_issues_90d": int(o.get("done_issues_90d") or 0),
+            "sp_volatility": float(v.get("sp_volatility") or 0) if v.get("sp_volatility") is not None else None,
+            "avg_sprint_delivery_ratio": float(v.get("avg_delivery_ratio") or 0) if v.get("avg_delivery_ratio") is not None else None,
+            "measured_sprints": int(v.get("measured_sprints") or 0),
             # Planning signals
             "sprints_allocated": int(res["sprints_allocated"] or 0),
             "total_alloc_sp": float(res["total_alloc_sp"] or 0),
             "total_eff_hours": float(res["total_eff_hours"] or 0),
+            # Bus factor
+            "top_repos": top_repos,
+            "sole_repos": len(sole_repos),
+            "dominant_repos": len(dominant_repos),
+            "bus_factor_score": bus_factor_score,
+            # Technical debt / hygiene
+            "debt_markers": debt_markers,
+            "conventional_commits_pct": conventional_pct,
+            "avg_commit_message_length": avg_message_length,
+            "merge_commits": merge_commits,
+            "hygiene_score": hygiene_score,
+            # DORA (org-level latest)
+            "change_failure_rate": float(dora_map.get("change_failure_rate", {}).get("value") or 0),
+            "mttr_minutes": float(dora_map.get("mttr_minutes", {}).get("value") or 0),
+            "flaky_tests": float(dora_map.get("flaky_tests", {}).get("value") or 0),
+            "deployment_frequency": float(dora_map.get("deployment_frequency", {}).get("value") or 0),
         })
 
     return sorted(result, key=lambda x: -(x["commits"] + x["prs_authored"]))
+
+
+@app.get("/productivity/developer-signals/{name}")
+async def developer_signal_detail(name: str, db: Session = Depends(get_db)):
+    """Full signal profile for a single developer by resource name."""
+    all_signals = _compute_developer_signals(db)
+    match = next((s for s in all_signals if s["name"].lower() == name.lower()), None)
+    if not match:
+        raise HTTPException(status_code=404, detail="Developer not found")
+    return match
 
 
 @app.get("/productivity/jira-sprint/{jira_sprint_id}/flow")

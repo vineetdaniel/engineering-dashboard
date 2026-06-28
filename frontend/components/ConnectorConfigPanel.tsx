@@ -62,6 +62,7 @@ const labels: Record<string, string> = {
   github: "GitHub",
   jenkins: "Jenkins",
   jira: "Jira",
+  mixpanel: "Mixpanel",
   observability: "Observability",
   AWS_MONTHLY_BUDGET: "Monthly budget override",
   AWS_COST_DELTA_THRESHOLD_PCT: "Cost increase alert threshold (%)",
@@ -82,7 +83,6 @@ export function ConnectorConfigPanel({ className, onSync, syncLoading, lastSyncR
   const [saved, setSaved] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [copied, setCopied] = useState<string | null>(null);
-
   useEffect(() => {
     async function load() {
       try {

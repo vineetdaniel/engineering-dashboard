@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sidebar, MobileNav, MobileBottomNav, navSections } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
@@ -28,6 +28,11 @@ export function DashboardShell({
   const router = useRouter();
   const [active, setActiveState] = useState(activeSection);
   const [commandOpen, setCommandOpen] = useState(false);
+
+  // Keep shell highlight in sync when the URL-driven activeSection prop changes.
+  useEffect(() => {
+    setActiveState(activeSection);
+  }, [activeSection]);
   const [filters] = useState<FilterState>(DEFAULT_FILTERS);
   const [lastUpdated] = useState<Date | null>(new Date());
 

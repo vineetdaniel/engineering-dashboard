@@ -12,11 +12,14 @@ export type PersonaType =
 
 export interface PersonaScore {
   delivery: number;    // 0-100: SP delivered / committed
-  activity: number;    // 0-100: commits + PRs normalised
+  activity: number;    // 0-100: commits + PRs normalised (diminishing returns)
   quality: number;     // 0-100: low concern ratio, high approval rate
   collaboration: number; // 0-100: reviews given + gating
   breadth: number;     // 0-100: repos touched, feature ratio
   consistency: number; // 0-100: sprints participated, delivery variance
+  commitSize: number;  // 0-100: penalise bulk commits, reward moderate sizes
+  reviewRigor: number; // 0-100: reviewer who raises meaningful concerns
+  wipLoad: number;    // 0-100: inverse of open/stuck PR load
 }
 
 export interface DeveloperPersona {
@@ -37,6 +40,13 @@ function clamp(v: number, max = 100): number {
   return Math.min(Math.max(Math.round(v), 0), max);
 }
 
+function diminishing(maxScore: number, v: number, norm: number): number {
+  // Logarithmic curve: reaches ~75% of max at norm, 90% at 2x norm, capped at max.
+  if (norm <= 0) return 0;
+  const ratio = v / norm;
+  return maxScore * (1 - Math.exp(-2 * ratio)) / (1 - Math.exp(-2));
+}
+
 function score(s: DeveloperSignal): PersonaScore {
   // Delivery: SP delivered rate (or ticket done rate if no SP)
   const deliveryRaw = s.delivery_rate_pct ?? (
@@ -45,10 +55,23 @@ function score(s: DeveloperSignal): PersonaScore {
       : 0
   );
 
-  // Activity: commits (norm ~150) + prs (norm ~100) weighted
-  const activityRaw = (s.commits / 150) * 50 + (s.prs_authored / 100) * 50;
+  // Activity: commits + PRs with diminishing returns so volume alone can't dominate.
+  // Norm: ~150 commits and ~100 PRs over 90 days.
+  const commitActivity = diminishing(50, s.commits, 150);
+  const prActivity = diminishing(50, s.prs_authored, 100);
+  const activityRaw = commitActivity + prActivity;
 
-  // Quality: low concern ratio = high quality; merged ratio
+  // Commit size: penalise bulk commits (>400 lines avg) and reward moderate sizes.
+  const linesPerCommit = s.commits > 0 ? (s.lines_added + s.lines_deleted) / s.commits : 0;
+  const commitSizeRaw = linesPerCommit === 0
+    ? 50
+    : linesPerCommit > 800
+    ? Math.max(20, 100 - (linesPerCommit - 800) / 20)
+    : linesPerCommit > 400
+    ? 60 + (400 - linesPerCommit) / 10
+    : 80 + Math.min(20, linesPerCommit / 20);
+
+  // Quality: low concern ratio = high quality; merged ratio fallback
   const qualityRaw = s.prs_with_reviews > 5
     ? Math.max(0, 100 - s.concern_ratio_pct * 2)
     : s.prs_merged > 0
@@ -58,14 +81,30 @@ function score(s: DeveloperSignal): PersonaScore {
   // Collaboration: reviews given (norm ~50) + gating (norm ~100)
   const collabRaw = (s.prs_reviewed / 50) * 50 + (s.prs_gated / 100) * 50;
 
-  // Breadth: repos touched (norm ~5) + feature ratio
+  // Breadth: repos touched (norm ~5) + feature ratio of PRs + meaningful commit mix
   const totalPrs = s.prs_authored || 1;
   const featureRatio = (s.feature_prs / totalPrs) * 100;
-  const breadthRaw = (s.repos_touched / 5) * 50 + (featureRatio / 100) * 50;
+  const totalCommits = s.commits || 1;
+  const meaningfulCommits = s.feature_commits + s.fix_commits + s.refactor_commits;
+  const commitFocusRatio = (meaningfulCommits / totalCommits) * 100;
+  const breadthRaw = (s.repos_touched / 5) * 35 + (featureRatio / 100) * 35 + (commitFocusRatio / 100) * 30;
 
-  // Consistency: sprints participated (norm ~8) + delivery rate stability
-  const consistencyRaw = (Math.min(s.sprints_participated, 8) / 8) * 60 +
-    (deliveryRaw / 100) * 40;
+  // Consistency: sprints participated (norm ~8) + delivery rate stability + low volatility bonus
+  const sprintsScore = (Math.min(s.sprints_participated, 8) / 8) * 60;
+  const deliveryStability = (deliveryRaw / 100) * 25;
+  const volatilityPenalty = s.sp_volatility !== null && s.measured_sprints >= 3
+    ? Math.min(15, s.sp_volatility / 5)
+    : 0;
+  const consistencyRaw = sprintsScore + deliveryStability + (15 - volatilityPenalty);
+
+  // Review rigor: how often this reviewer raises changes-requested vs approves.
+  const reviewDecisions = s.approvals_given + s.changes_requested_given;
+  const reviewRigorRaw = reviewDecisions > 5
+    ? (s.changes_requested_given / reviewDecisions) * 100
+    : 0;
+
+  // WIP load: penalise open/draft/stuck PRs.
+  const wipScore = Math.max(0, 100 - (s.open_prs * 8) - (s.draft_prs * 4) - (s.stuck_prs * 15));
 
   return {
     delivery: clamp(deliveryRaw),
@@ -74,6 +113,9 @@ function score(s: DeveloperSignal): PersonaScore {
     collaboration: clamp(collabRaw),
     breadth: clamp(breadthRaw),
     consistency: clamp(consistencyRaw),
+    commitSize: clamp(commitSizeRaw),
+    reviewRigor: clamp(reviewRigorRaw),
+    wipLoad: clamp(wipScore),
   };
 }
 
@@ -81,27 +123,27 @@ function classify(s: DeveloperSignal, sc: PersonaScore): PersonaType {
   const hasData = s.commits > 5 || s.prs_authored > 5 || s.sprints_participated > 1;
   if (!hasData) return "Emerging";
 
-  // Overloaded: too many open issues relative to delivery
-  if (s.open_issues > 60 && (s.delivery_rate_pct ?? 100) < 50) return "Overloaded";
+  // Overloaded: too many open issues / WIP relative to delivery
+  if ((s.open_issues > 60 && (s.delivery_rate_pct ?? 100) < 50) || (s.open_prs >= 4 && sc.wipLoad < 40)) return "Overloaded";
 
-  // Reviewer / Gatekeeper: reviews >> authored
-  if (s.prs_gated > s.prs_authored * 2 && s.prs_reviewed > 30) return "Reviewer";
+  // Reviewer / Gatekeeper: reviews >> authored, and raises quality concerns when reviewing
+  if (s.prs_reviewed > 30 && s.prs_reviewed > s.prs_authored * 1.5 && sc.reviewRigor >= 20) return "Reviewer";
 
-  // Anchor: high delivery + high activity + high collab
-  if (sc.delivery >= 80 && sc.activity >= 60 && sc.collaboration >= 50) return "Anchor";
+  // Anchor: high delivery + high quality + meaningful collaboration
+  if (sc.delivery >= 75 && sc.quality >= 60 && sc.collaboration >= 50) return "Anchor";
 
   // Fixer: high bug ratio or high concern ratio
   if ((s.bug_ratio_pct ?? 0) > 30 || s.concern_ratio_pct > 20) return "Fixer";
 
-  // Deep Worker: low PR count but high lines
+  // Deep Worker: low PR count but high lines and strong delivery
   const linesPerCommit = s.commits > 0 ? (s.lines_added + s.lines_deleted) / s.commits : 0;
-  if (s.prs_authored < 20 && linesPerCommit > 200 && s.commits > 10) return "Deep Worker";
+  if (s.prs_authored < 20 && linesPerCommit > 200 && s.commits > 10 && sc.delivery >= 50) return "Deep Worker";
 
-  // Consistent: good delivery across many sprints
-  if (sc.consistency >= 70 && sc.delivery >= 65) return "Consistent";
+  // Consistent: good delivery across many sprints with low volatility
+  if (sc.consistency >= 70 && sc.delivery >= 65 && (s.sp_volatility === null || s.sp_volatility <= 25)) return "Consistent";
 
-  // Builder: high feature PR ratio + activity
-  if (sc.breadth >= 60 && sc.activity >= 50) return "Builder";
+  // Builder: feature-driven with reasonable breadth and quality
+  if (sc.breadth >= 55 && sc.activity >= 40 && sc.quality >= 50) return "Builder";
 
   return "Emerging";
 }
@@ -117,23 +159,27 @@ const PERSONA_META: Record<PersonaType, { tagline: string; color: string; icon: 
   Emerging:      { tagline: "Building momentum",                    color: "from-slate-500 to-slate-700",     icon: "🌱" },
 };
 
-function strengths(s: DeveloperSignal, type: PersonaType): string[] {
+function strengths(s: DeveloperSignal, sc: PersonaScore, type: PersonaType): string[] {
   const out: string[] = [];
   if (s.delivery_rate_pct !== null && s.delivery_rate_pct >= 80) out.push(`${s.delivery_rate_pct}% sprint delivery rate`);
-  if (s.commits >= 100) out.push(`${s.commits} commits in 90 days`);
+  if (sc.consistency >= 75 && s.sp_volatility !== null && s.sp_volatility <= 20) out.push("Predictable sprint delivery");
+  if (sc.quality >= 85 && s.prs_with_reviews > 5) out.push("High-quality PRs — rarely sent back");
   if (s.prs_reviewed >= 30) out.push(`Reviewed ${s.prs_reviewed} PRs`);
+  if (sc.reviewRigor >= 30 && s.prs_reviewed >= 10) out.push("Rigorous reviewer — catches issues");
   if (s.prs_gated >= 50) out.push(`Gatekeeper for ${s.prs_gated} merges`);
   if (s.repos_touched >= 4) out.push(`Works across ${s.repos_touched} repos`);
-  if (s.concern_ratio_pct < 5 && s.prs_with_reviews > 5) out.push("Clean PRs — rarely sent back");
   if (s.total_tickets_done >= 20) out.push(`${s.total_tickets_done} Jira tickets done`);
+  if (sc.commitSize >= 80 && s.commits > 10) out.push("Well-sized commits");
   if (s.after_hours_pct < 10 && s.weekend_pct < 5) out.push("Healthy working hours");
   return out.slice(0, 3);
 }
 
-function risks(s: DeveloperSignal, type: PersonaType): string[] {
+function risks(s: DeveloperSignal, sc: PersonaScore, type: PersonaType): string[] {
   const out: string[] = [];
   if (s.open_issues > 40) out.push(`${s.open_issues} open Jira tickets — backlog risk`);
+  if (s.open_prs >= 4 || s.stuck_prs >= 2) out.push(`${s.open_prs} open PRs${s.stuck_prs > 0 ? ` (${s.stuck_prs} stuck >7d)` : ""} — WIP overload`);
   if (s.delivery_rate_pct !== null && s.delivery_rate_pct < 50 && s.sprints_participated > 2) out.push(`Only ${s.delivery_rate_pct}% SP delivered vs committed`);
+  if (s.sp_volatility !== null && s.measured_sprints >= 3 && s.sp_volatility > 35) out.push(`Sprint delivery volatile (σ ${s.sp_volatility}%)`);
   if (s.concern_ratio_pct > 15) out.push(`${s.concern_ratio_pct}% PRs had review concerns`);
   if (s.after_hours_pct > 25) out.push(`${s.after_hours_pct}% commits outside work hours`);
   if (s.weekend_pct > 10) out.push(`${s.weekend_pct}% commits on weekends`);
@@ -151,8 +197,8 @@ export function buildPersonas(signals: DeveloperSignal[]): DeveloperPersona[] {
       signal: s,
       type,
       tagline: meta.tagline,
-      strengths: strengths(s, type),
-      risks: risks(s, type),
+      strengths: strengths(s, sc, type),
+      risks: risks(s, sc, type),
       scores: sc,
       color: meta.color,
       icon: meta.icon,

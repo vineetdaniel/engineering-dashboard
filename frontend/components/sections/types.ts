@@ -22,4 +22,5 @@ export interface SectionProps {
   syncLoading: string | null;
   lastUpdated?: Date | null;
   lastSyncResult?: { source: string; metrics: number; events: number } | null;
+  healthLoading?: boolean;
 }

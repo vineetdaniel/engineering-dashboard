@@ -27,3 +27,4 @@ out/
 
 # Docker / data
 postgres_data/
+.aider*

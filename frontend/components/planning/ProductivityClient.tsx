@@ -22,9 +22,22 @@ import type { SprintListItem } from "@/lib/actions/sprints";
 type DateRange = "24h" | "7d" | "30d" | "90d";
 type SortKey = "name" | "commits" | "allocated_story_points" | "completion_pct" | "sp_per_effective_hour" | "jira_open_issues";
 
+const EMPTY_SUMMARY: ProductivitySummary = {
+  developers: [],
+  unmatched: [],
+  total_commits: 0,
+  total_allocated_points: 0,
+  total_done_tasks: 0,
+  total_tasks: 0,
+  avg_completion_pct: 0,
+  active_developers: 0,
+};
+
+const EMPTY_TREND: ProductivityTrend = { metric: "", points: [] };
+
 interface ProductivityClientProps {
-  initialSummary: ProductivitySummary;
-  initialCommitTrend: ProductivityTrend;
+  initialSummary?: ProductivitySummary;
+  initialCommitTrend?: ProductivityTrend;
   sprints: SprintListItem[];
 }
 
@@ -33,22 +46,23 @@ export function ProductivityClient({
   initialCommitTrend,
   sprints,
 }: ProductivityClientProps) {
-  const [summary, setSummary] = useState(initialSummary);
-  const [commitTrend, setCommitTrend] = useState(initialCommitTrend);
+  const [summary, setSummary] = useState(initialSummary ?? EMPTY_SUMMARY);
+  const [commitTrend, setCommitTrend] = useState(initialCommitTrend ?? EMPTY_TREND);
   const [scope, setScope] = useState<"overall" | "sprint">("overall");
   const [sprintId, setSprintId] = useState<number | "">(sprints[0]?.id ?? "");
   const [dateRange, setDateRange] = useState<DateRange>("90d");
   const [sortKey, setSortKey] = useState<SortKey>("commits");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(!summary.developers.length);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const mounted = useRef(false);
 
   useEffect(() => {
-    // Skip the very first render — initialSummary already has 90d/overall data
-    // from the server. Only re-fetch when the user actually changes a filter.
+    // Skip the very first render only when the server already provided data.
+    // If the server shipped an empty payload, fetch immediately so the page
+    // populates without blocking SSR on the heavy developer-signals query.
     if (!mounted.current) {
       mounted.current = true;
-      return;
+      if (summary.developers.length > 0) return;
     }
     let cancelled = false;
     setLoading(true);
@@ -88,6 +102,8 @@ export function ProductivityClient({
     .slice(0, 8)
     .map((d) => ({ label: d.name.split(" ")[0], value: d.commits }));
 
+  const isInitialLoading = loading && summary.developers.length === 0;
+
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -100,6 +116,11 @@ export function ProductivityClient({
       </div>
 
       <PlanningSubNav active="productivity" />
+
+      {isInitialLoading ? (
+        <ProductivitySkeleton />
+      ) : (
+        <>
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
@@ -253,6 +274,27 @@ export function ProductivityClient({
         true task-completion timestamp yet, so cycle-time metrics are approximate. Identity
         matching is by name (fuzzy); see unmatched identities above.
       </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProductivitySkeleton() {
+  return (
+    <div className="animate-pulse space-y-6">
+      <div className="h-9 w-48 rounded-lg bg-muted" />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="h-24 rounded-xl bg-muted" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="h-64 rounded-xl bg-muted" />
+        <div className="h-64 rounded-xl bg-muted" />
+      </div>
+      <div className="h-80 rounded-xl bg-muted" />
+      <div className="h-96 rounded-xl bg-muted" />
     </div>
   );
 }

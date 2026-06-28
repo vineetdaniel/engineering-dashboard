@@ -23,6 +23,8 @@ _SECRET_KEYS = {
     "PAGERDUTY_API_KEY",
     "SLACK_WEBHOOK_URL",
     "JENKINS_API_KEY",
+    "MIXPANEL_API_SECRET",
+    "MIXPANEL_API_KEY",
 }
 
 # Environment-driven defaults per connector. Must stay in sync with
@@ -47,6 +49,11 @@ _CONNECTOR_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "JENKINS_URL": settings.JENKINS_URL,
         "JENKINS_USERNAME": settings.JENKINS_USERNAME,
         "JENKINS_API_KEY": settings.JENKINS_API_KEY,
+    },
+    "mixpanel": {
+        "MIXPANEL_API_KEY": settings.MIXPANEL_API_KEY,
+        "MIXPANEL_API_SECRET": settings.MIXPANEL_API_SECRET,
+        "MIXPANEL_PROJECT_ID": settings.MIXPANEL_PROJECT_ID,
     },
     "jira": {
         "JIRA_SERVER": settings.JIRA_SERVER,
@@ -81,6 +88,7 @@ _CONNECTOR_REQUIRED: Dict[str, List[str]] = {
     "github": ["GITHUB_TOKEN", "GITHUB_ORG"],
     "jenkins": ["JENKINS_URL", "JENKINS_API_KEY"],
     "jira": ["JIRA_SERVER", "JIRA_USERNAME", "JIRA_API_TOKEN", "JIRA_PROJECT_KEYS"],
+    "mixpanel": ["MIXPANEL_API_SECRET", "MIXPANEL_API_KEY"],
     "observability": ["OBSERVABILITY_PROVIDER"],
 }
 

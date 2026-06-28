@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from backend.config import settings
 
 celery_app = Celery(
@@ -14,4 +15,10 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "sync-all-connectors-hourly": {
+            "task": "backend.tasks.sync.sync_all_connectors",
+            "schedule": 3600.0,  # every hour
+        },
+    },
 )

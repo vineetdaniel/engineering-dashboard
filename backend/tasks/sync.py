@@ -11,6 +11,19 @@ def sync_source(source: str):
     return asyncio.run(_run_sync(connector()))
 
 
+@celery_app.task
+def sync_all_connectors():
+    """Sync every registered connector hourly via Celery Beat."""
+    import asyncio
+    results = {}
+    for name, factory in CONNECTORS.items():
+        try:
+            results[name] = asyncio.run(_run_sync(factory()))
+        except Exception as e:
+            results[name] = {"error": str(e)}
+    return results
+
+
 async def _run_sync(conn):
     health = await conn.health_check()
     if not health["ok"]:

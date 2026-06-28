@@ -21,12 +21,22 @@ interface ConnectorStatusProps {
   health: any;
   onSync?: (source: string) => void;
   loading?: string | null;
+  isLoading?: boolean;
   className?: string;
 }
 
-export function ConnectorStatus({ health, onSync, loading, className }: ConnectorStatusProps) {
+export function ConnectorStatus({ health, onSync, loading, isLoading, className }: ConnectorStatusProps) {
   const connectors = health?.connectors || {};
   const entries = Object.entries(connectors);
+
+  if (isLoading) {
+    return (
+      <div className={cn("flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 shadow-sm", className)}>
+        <span className="hidden text-xs font-medium text-muted-foreground sm:inline">Integrations:</span>
+        <div className="h-6 w-24 animate-pulse rounded bg-muted" />
+      </div>
+    );
+  }
 
   if (entries.length === 0) return null;
 

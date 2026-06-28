@@ -328,6 +328,7 @@ class GitHubConnector(Connector):
                 "pr_number": pr_number,
                 "author_login": pr.get("user", {}).get("login"),
                 "author_name": pr.get("user", {}).get("login"),
+                "is_draft": bool(pr.get("draft")),
                 "branch": pr.get("head", {}).get("ref"),
                 "base_branch": pr.get("base", {}).get("ref"),
                 "reviewer_logins": reviewer_logins,

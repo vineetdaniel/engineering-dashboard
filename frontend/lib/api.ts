@@ -21,6 +21,8 @@ export const getSettings = () => api("/settings");
 export const getConnectorHealth = () => api("/connectors/health");
 export const getConnectorConfigs = () => api("/settings/connectors");
 export const getConnectorGuide = (name: string) => api(`/settings/connectors/${name}/guide`);
+export const getConnectorEvents = (name: string) =>
+  api(`/settings/connectors/${name}/events`);
 export const saveConnectorConfig = (name: string, config: Record<string, string>) =>
   api(`/settings/connectors/${name}`, {
     method: "POST",
@@ -168,6 +170,9 @@ export interface DeveloperSignal {
   commits: number;
   lines_added: number;
   lines_deleted: number;
+  feature_commits: number;
+  fix_commits: number;
+  refactor_commits: number;
   repos_touched: number;
   peak_hour_ist: number | null;
   peak_dow: number | null;
@@ -183,10 +188,19 @@ export interface DeveloperSignal {
   fix_prs: number;
   refactor_prs: number;
   bug_ratio_pct: number | null;
+  // WIP load
+  open_prs: number;
+  draft_prs: number;
+  stuck_prs: number;
+  // Review quality signals (as author)
   prs_with_concerns: number;
   prs_changes_requested: number;
   prs_with_reviews: number;
   concern_ratio_pct: number;
+  // Review quality signals (as reviewer)
+  approvals_given: number;
+  changes_requested_given: number;
+  reviewer_changes_ratio_pct: number | null;
   // Jira
   sprints_participated: number;
   total_sp_committed: number;
@@ -195,11 +209,39 @@ export interface DeveloperSignal {
   total_tickets_done: number;
   open_issues: number;
   done_issues_90d: number;
+  sp_volatility: number | null;
+  avg_sprint_delivery_ratio: number | null;
+  measured_sprints: number;
   // Planning
   sprints_allocated: number;
   total_alloc_sp: number;
   total_eff_hours: number;
+  // Bus factor
+  top_repos: {
+    repo: string;
+    commits: number;
+    total_commits: number;
+    share_pct: number;
+    sole_contributor: boolean;
+  }[];
+  sole_repos: number;
+  dominant_repos: number;
+  bus_factor_score: number;
+  // Technical debt / hygiene
+  debt_markers: number;
+  conventional_commits_pct: number;
+  avg_commit_message_length: number | null;
+  merge_commits: number;
+  hygiene_score: number;
+  // DORA (org-level latest)
+  change_failure_rate: number;
+  mttr_minutes: number;
+  flaky_tests: number;
+  deployment_frequency: number;
 }
 
 export const getDeveloperSignals = (): Promise<DeveloperSignal[]> =>
   api("/productivity/developer-signals");
+
+export const getDeveloperSignal = (name: string): Promise<DeveloperSignal> =>
+  api(`/productivity/developer-signals/${encodeURIComponent(name)}`);

@@ -32,8 +32,16 @@ export function PersonasClient() {
 
   useEffect(() => {
     getDeveloperSignals()
-      .then((signals) => setPersonas(buildPersonas(signals)))
-      .catch(() => {})
+      .then((signals) => {
+        const arr = Array.isArray(signals) ? signals : [];
+        if (!Array.isArray(signals)) {
+          console.error("PersonasClient: expected array from getDeveloperSignals, got", typeof signals, signals);
+        }
+        setPersonas(buildPersonas(arr));
+      })
+      .catch((err) => {
+        console.error("PersonasClient: failed to load developer signals", err);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -104,7 +112,11 @@ export function PersonasClient() {
       </div>
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading persona data…</p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Card key={i} className="h-80 animate-pulse bg-muted border-0" />
+          ))}
+        </div>
       ) : filtered.length === 0 ? (
         <Card className="p-8 text-center text-sm text-muted-foreground">
           No developers match this filter.

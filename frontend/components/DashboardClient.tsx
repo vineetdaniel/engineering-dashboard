@@ -10,38 +10,46 @@ import { SkeletonGrid } from "@/components/widgets/SkeletonGrid";
 import { WidgetErrorBoundary } from "@/components/WidgetErrorBoundary";
 import { IncidentBanner } from "@/components/IncidentBanner";
 
+const SectionLoader = () => (
+  <div className="mx-auto max-w-7xl space-y-5 py-2">
+    <SkeletonGrid cols={4} rows={2} />
+    <SkeletonGrid cols={3} rows={2} />
+    <SkeletonGrid cols={4} rows={1} />
+  </div>
+);
+
 const OverviewSection = dynamic(() => import("@/components/sections/OverviewSection").then((m) => m.OverviewSection), {
-  loading: () => <SkeletonGrid cols={3} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const EngineeringSection = dynamic(() => import("@/components/sections/EngineeringSection").then((m) => m.EngineeringSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const ProductSection = dynamic(() => import("@/components/sections/ProductSection").then((m) => m.ProductSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const OperationsSection = dynamic(() => import("@/components/sections/OperationsSection").then((m) => m.OperationsSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const SecuritySection = dynamic(() => import("@/components/sections/SecuritySection").then((m) => m.SecuritySection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const CostSection = dynamic(() => import("@/components/sections/CostSection").then((m) => m.CostSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const TeamSection = dynamic(() => import("@/components/sections/TeamSection").then((m) => m.TeamSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const SettingsSection = dynamic(() => import("@/components/sections/SettingsSection").then((m) => m.SettingsSection), {
-  loading: () => <SkeletonGrid cols={2} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const PaymentsSection = dynamic(() => import("@/components/sections/PaymentsSection").then((m) => m.PaymentsSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const ComplianceSection = dynamic(() => import("@/components/sections/ComplianceSection").then((m) => m.ComplianceSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 const ReportsSection = dynamic(() => import("@/components/sections/ReportsSection").then((m) => m.ReportsSection), {
-  loading: () => <SkeletonGrid cols={4} rows={2} />,
+  loading: () => <SectionLoader />,
 });
 
 interface DashboardClientProps {
@@ -93,8 +101,18 @@ export function DashboardClient({
 
   const [active, setActiveState] = useState(initialSection);
   const [health, setHealth] = useState(initialHealth);
+
+  // Sync active section with URL changes when the same page is re-rendered
+  // with a different ?section= query param (e.g. sidebar clicks).
+  useEffect(() => {
+    const next = urlSection && VALID_SECTIONS.has(urlSection) ? urlSection : "overview";
+    if (next !== active) {
+      setActiveState(next);
+    }
+  }, [urlSection, active]);
   const [metrics, setMetrics] = useState(initialMetrics);
   const [events, setEvents] = useState(initialEvents);
+  const [healthLoading, setHealthLoading] = useState(true);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [backendOk, setBackendOk] = useState(true);
@@ -146,20 +164,30 @@ export function DashboardClient({
   async function refreshData() {
     setError(null);
     try {
-      const [m, e, h] = await Promise.all([
+      const [m, e] = await Promise.all([
         getMetrics(filters),
         getEvents(filters),
-        getConnectorHealth(),
       ]);
       setMetrics(m);
       setEvents(e);
-      setHealth(h);
       setBackendOk(true);
       setLastUpdated(new Date());
     } catch (err) {
       const message = err instanceof Error ? err.message : "Refresh failed";
       setError(message);
       setBackendOk(false);
+    }
+  }
+
+  async function refreshHealth() {
+    try {
+      setHealthLoading(true);
+      const h = await getConnectorHealth();
+      setHealth(h);
+    } catch (err) {
+      console.error("Connector health refresh failed", err);
+    } finally {
+      setHealthLoading(false);
     }
   }
 
@@ -183,10 +211,20 @@ export function DashboardClient({
   }, [filters]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    refreshHealth();
+  }, []);
+
+  useEffect(() => {
+    const dataInterval = setInterval(() => {
       refreshData();
     }, 60000);
-    return () => clearInterval(interval);
+    const healthInterval = setInterval(() => {
+      refreshHealth();
+    }, 120000);
+    return () => {
+      clearInterval(dataInterval);
+      clearInterval(healthInterval);
+    };
   }, [filters]);
 
   const data = useMemo(() => {
@@ -220,6 +258,7 @@ export function DashboardClient({
     lastUpdated,
     lastSyncResult,
     dataSource,
+    healthLoading,
   };
 
   return (
@@ -242,63 +281,83 @@ export function DashboardClient({
         </div>
       )}
 
-      <Suspense fallback={<SkeletonGrid cols={4} rows={2} />}>
-        {active === "overview" && (
+      {active === "overview" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <OverviewSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "engineering" && (
+        </Suspense>
+      )}
+      {active === "engineering" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <EngineeringSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "product" && (
+        </Suspense>
+      )}
+      {active === "product" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <ProductSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "operations" && (
+        </Suspense>
+      )}
+      {active === "operations" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <OperationsSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "security" && (
+        </Suspense>
+      )}
+      {active === "security" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <SecuritySection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "compliance" && (
+        </Suspense>
+      )}
+      {active === "compliance" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <ComplianceSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "cost" && (
+        </Suspense>
+      )}
+      {active === "cost" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <CostSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "team" && (
+        </Suspense>
+      )}
+      {active === "team" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <TeamSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "payments" && (
+        </Suspense>
+      )}
+      {active === "payments" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <PaymentsSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "settings" && (
+        </Suspense>
+      )}
+      {active === "settings" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <SettingsSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-        {active === "reports" && (
+        </Suspense>
+      )}
+      {active === "reports" && (
+        <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <ReportsSection {...sectionProps} />
           </WidgetErrorBoundary>
-        )}
-      </Suspense>
+        </Suspense>
+      )}
     </DashboardShell>
   );
 }
