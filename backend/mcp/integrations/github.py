@@ -6,6 +6,9 @@ import httpx
 
 from backend.mcp.integrations.base import Connector
 
+# Constants for DORA metrics calculations
+DAYS_IN_WEEK = 7
+
 
 class GitHubConnector(Connector):
     name = "github"
@@ -84,8 +87,8 @@ class GitHubConnector(Connector):
             "source": "github",
             "metric_type": "deploy_frequency",
             "entity": self.org,
-            "value": round(deploy_days / max(1, 7), 2),
-            "meta": {"window_days": 7, "deploy_days": deploy_days},
+            "value": round(deploy_days / max(1, DAYS_IN_WEEK), 2),
+            "meta": {"window_days": DAYS_IN_WEEK, "deploy_days": deploy_days},
             "timestamp": now,
         }]
 

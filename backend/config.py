@@ -3,9 +3,9 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     APP_ENV: str = "development"
-    SECRET_KEY: str = "change-me"
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/ctodash"
-    REDIS_URL: str = "redis://localhost:6379/0"
+    SECRET_KEY: str = ""
+    DATABASE_URL: str = ""
+    REDIS_URL: str = ""
 
     GITHUB_TOKEN: str = ""
     GITHUB_ORG: str = ""
