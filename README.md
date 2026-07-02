@@ -1,5 +1,11 @@
 # cto-dash
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Node 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.11+-009688.svg)](https://fastapi.tiangolo.com/)
+
 A **fintech engineering command center** that aggregates signals from GitHub, Jira Cloud, Datadog/New Relic, cloud billing, compliance tools, and more — exposed via a unified MCP server and rendered in a Next.js dashboard.
 
 ![Overview Dashboard](docs/screenshots/overview.png)
@@ -47,17 +53,52 @@ Real connectors fall back to realistic seed data when credentials are empty, so 
 
 ## Screenshots
 
-| Overview | Engineering | Product |
-|----------|-------------|---------|
-| ![Overview](docs/screenshots/overview.png) | ![Engineering](docs/screenshots/engineering.png) | ![Product](docs/screenshots/product.png) |
+Developer and resource names are intentionally blurred in the screenshots below.
 
-| Operations | Payments | Security |
-|------------|----------|----------|
-| ![Operations](docs/screenshots/operations.png) | ![Payments](docs/screenshots/payments.png) | ![Security](docs/screenshots/security.png) |
+### Overview
+Executive summary with uptime, payments, security, cost, and engineering flow scores.
 
-| Compliance | Cost | Team |
-|------------|------|------|
-| ![Compliance](docs/screenshots/compliance.png) | ![Cost](docs/screenshots/cost.png) | ![Team](docs/screenshots/team.png) |
+![Overview](docs/screenshots/overview.png)
+
+### Engineering
+Pull requests, commit velocity, DORA metrics, deployment frequency, lead time, and MTTR.
+
+![Engineering](docs/screenshots/engineering.png)
+
+### Product
+Jira sprint progress, story points, backlog health, and delivery predictability.
+
+![Product](docs/screenshots/product.png)
+
+### Operations
+Active incidents, on-call rotation, P0/P1 tracking, and incident lifecycle.
+
+![Operations](docs/screenshots/operations.png)
+
+### Payments
+Payment success rate, fraud/chargeback rates, transaction volume, settlement health, and cost per transaction.
+
+![Payments](docs/screenshots/payments.png)
+
+### Security
+CVE severity distribution, critical SLA tracking, secrets scanning findings, and API gateway security.
+
+![Security](docs/screenshots/security.png)
+
+### Compliance
+Control pass/fail grid, audit log, and PCI/SOC mappings.
+
+![Compliance](docs/screenshots/compliance.png)
+
+### Cost
+MTD cloud spend, budget burn forecast, cost anomalies, and top spend drivers.
+
+![Cost](docs/screenshots/cost.png)
+
+### Team
+Squad scorecards, developer productivity personas, resource allocation, and bus-factor analysis.
+
+![Team](docs/screenshots/team.png)
 
 ## Installation
 
@@ -152,6 +193,13 @@ See `.env.example` for the full list of connector settings.
 - [Dashboard Plan](PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [MCP Connectors](docs/MCP.md)
+- [Contributing](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+
+## Maintainers
+
+CTO Dash is maintained by Vineet Daniel and contributors.
 
 ## Git author
 
