@@ -1,0 +1,218 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 215 25% 27%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 226 100% 97%;
+    --accent-foreground: 245 58% 51%;
+    --destructive: 347 77% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 160 84% 39%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --danger: 347 77% 50%;
+    --danger-foreground: 0 0% 100%;
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 239 84% 67%;
+    --radius: 0.875rem;
+
+    /* Semantic status tokens */
+    --status-open: 199 89% 48%;
+    --status-closed: 160 84% 39%;
+    --status-pending: 38 92% 50%;
+    --severity-critical: 347 77% 50%;
+    --severity-high: 38 92% 50%;
+    --severity-medium: 239 84% 67%;
+    --severity-low: 215 16% 47%;
+
+    /* Surface effects */
+    --surface: 0 0% 100%;
+    --surface-foreground: 222 47% 11%;
+    --surface-elevated: 0 0% 100%;
+    --glass-border: 255 255 255 / 0.6;
+    --glass-bg: 255 255 255 / 0.55;
+    --glass-elevated: 255 255 255 / 0.75;
+  }
+
+  .dark {
+    --background: 229 84% 5%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 214 32% 91%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 244 47% 20%;
+    --accent-foreground: 228 96% 89%;
+    --destructive: 350 89% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 158 64% 52%;
+    --success-foreground: 229 84% 5%;
+    --warning: 43 96% 56%;
+    --warning-foreground: 229 84% 5%;
+    --danger: 350 89% 60%;
+    --danger-foreground: 0 0% 100%;
+    --info: 198 93% 60%;
+    --info-foreground: 229 84% 5%;
+    --border: 215 25% 27%;
+    --input: 215 25% 27%;
+    --ring: 239 84% 67%;
+
+    --status-open: 198 93% 60%;
+    --status-closed: 158 64% 52%;
+    --status-pending: 43 96% 56%;
+    --severity-critical: 350 89% 60%;
+    --severity-high: 43 96% 56%;
+    --severity-medium: 234 89% 74%;
+    --severity-low: 215 20% 65%;
+
+    --surface: 222 47% 11%;
+    --surface-foreground: 210 40% 98%;
+    --surface-elevated: 217 33% 17%;
+    --glass-border: 255 255 255 / 0.08;
+    --glass-bg: 15 23 42 / 0.6;
+    --glass-elevated: 15 23 42 / 0.85;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    min-height: 100vh;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .surface {
+    @apply bg-surface text-surface-foreground;
+  }
+
+  .glass {
+    border: 1px solid rgb(var(--glass-border));
+    background-color: rgb(var(--glass-bg));
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+
+  .glass-strong {
+    border: 1px solid rgb(var(--glass-border));
+    background-color: rgb(var(--glass-elevated));
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+  }
+
+  .glossy-card {
+    @apply relative overflow-hidden rounded-2xl;
+    border: 1px solid rgb(var(--glass-border));
+    background-color: rgb(var(--surface));
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+  }
+
+  .glossy-card::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+    opacity: 0.8;
+  }
+
+  .dark .glossy-card::before {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-br from-slate-900 to-slate-600 bg-clip-text text-transparent;
+  }
+
+  .dark .text-gradient {
+    @apply from-slate-100 to-slate-300;
+  }
+
+  .text-gradient-brand {
+    @apply bg-gradient-to-br from-indigo-700 to-violet-600 bg-clip-text text-transparent;
+  }
+
+  .dark .text-gradient-brand {
+    @apply from-indigo-400 to-violet-300;
+  }
+
+  .status-dot {
+    @apply inline-block h-2 w-2 rounded-full;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 100px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
