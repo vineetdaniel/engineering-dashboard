@@ -20,6 +20,7 @@ import {
 } from "@/lib/api";
 import { StrategyHealthScore } from "@/components/widgets/StrategyHealthScore";
 import { GoalMetricCards } from "@/components/widgets/GoalMetricCards";
+import { InitiativePortfolio } from "@/components/widgets/InitiativePortfolio";
 
 const emptyGoals: StrategyGoals = {
   six_month: "",
@@ -367,6 +368,10 @@ export function StrategySection({
 
           <div className="grid grid-cols-1 gap-5">
             <GoalMetricCards cards={result.goal_cards} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-5">
+            <InitiativePortfolio buckets={result.initiative_portfolio} actions={result.action_items} />
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

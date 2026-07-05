@@ -100,11 +100,26 @@ export interface GoalMetricCard {
   weight: number;
 }
 
+export interface InitiativeBucket {
+  id: string;
+  key: string;
+  label: string;
+  description: string;
+  status: "critical" | "at_risk" | "healthy" | "tracking";
+  open_items: number;
+  critical_items: number;
+  high_items: number;
+  near_term_items: number;
+  action_ids: string[];
+  sections: string[];
+}
+
 export interface StrategyGenerateOut {
   narrative: string;
   action_items: StrategyActionItem[];
   health_score: HealthScore;
   goal_cards: GoalMetricCard[];
+  initiative_portfolio: InitiativeBucket[];
   data_driven: boolean;
   llm_enhanced: boolean;
 }
