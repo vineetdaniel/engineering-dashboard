@@ -136,6 +136,24 @@ export interface WhatIfScenarioOut {
   scenario: StrategyGenerateOut;
 }
 
+export interface IntelligenceSignal {
+  id: string;
+  section: string;
+  label: string;
+  value: number | null;
+  value_text: string | null;
+  unit?: string | null;
+  trend?: "up" | "down" | "flat" | null;
+  status: "healthy" | "at_risk" | "critical" | "unknown";
+  source_metric_type?: string | null;
+  source_event_type?: string | null;
+}
+
+export interface IntelligencePanelOut {
+  updated_at: string | null;
+  signals: IntelligenceSignal[];
+}
+
 export const getStrategy = (): Promise<StrategyOut> => api("/strategy");
 
 export const saveStrategy = (goals: StrategyGoals): Promise<StrategyOut> =>
@@ -172,6 +190,9 @@ export const generateWhatIf = (
       environment: filters?.environment === "all" ? null : filters?.environment,
     }),
   });
+
+export const getStrategyIntelligence = (filters?: ApiFilters): Promise<IntelligencePanelOut> =>
+  api(`/strategy/intelligence?${buildParams(filters)}`);
 
 export interface ApiFilters {
   dateRange?: "24h" | "7d" | "30d" | "90d";

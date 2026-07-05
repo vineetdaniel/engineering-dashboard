@@ -22,6 +22,7 @@ import { StrategyHealthScore } from "@/components/widgets/StrategyHealthScore";
 import { GoalMetricCards } from "@/components/widgets/GoalMetricCards";
 import { InitiativePortfolio } from "@/components/widgets/InitiativePortfolio";
 import { WhatIfScenario } from "@/components/widgets/WhatIfScenario";
+import { CrossSectionIntelligence } from "@/components/widgets/CrossSectionIntelligence";
 
 const emptyGoals: StrategyGoals = {
   six_month: "",
@@ -373,6 +374,10 @@ export function StrategySection({
 
           <div className="grid grid-cols-1 gap-5">
             <InitiativePortfolio buckets={result.initiative_portfolio} actions={result.action_items} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-5">
+            <CrossSectionIntelligence filters={filters} />
           </div>
 
           <div className="grid grid-cols-1 gap-5">
