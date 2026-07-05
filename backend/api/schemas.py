@@ -250,3 +250,20 @@ class IntelligenceSignal(BaseModel):
 class IntelligencePanelOut(BaseModel):
     updated_at: Optional[datetime] = None
     signals: List[IntelligenceSignal]
+
+
+class StrategySnapshotIn(BaseModel):
+    title: Optional[str] = None
+
+
+class StrategySnapshotOut(BaseModel):
+    id: int
+    title: Optional[str]
+    snapshot: StrategyGenerateOut
+    health_score: Optional[float]
+    action_count: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

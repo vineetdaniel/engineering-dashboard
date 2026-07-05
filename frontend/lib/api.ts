@@ -194,6 +194,42 @@ export const generateWhatIf = (
 export const getStrategyIntelligence = (filters?: ApiFilters): Promise<IntelligencePanelOut> =>
   api(`/strategy/intelligence?${buildParams(filters)}`);
 
+export const getStrategySnapshot = (id: number): Promise<StrategySnapshotOut> =>
+  api(`/strategy/snapshots/${id}`);
+
+export interface StrategySnapshotSummary {
+  id: number;
+  title: string | null;
+  health_score: number | null;
+  action_count: number;
+  created_at: string;
+}
+
+export interface StrategySnapshotOut {
+  id: number;
+  title: string | null;
+  snapshot: StrategyGenerateOut;
+  health_score: number | null;
+  action_count: number;
+  created_at: string;
+}
+
+export const listStrategySnapshots = (): Promise<StrategySnapshotSummary[]> =>
+  api("/strategy/snapshots");
+
+export const createStrategySnapshot = (
+  title: string,
+  snapshot: StrategyGenerateOut
+): Promise<StrategySnapshotOut> =>
+  api("/strategy/snapshots", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, snapshot }),
+  });
+
+export const deleteStrategySnapshot = (id: number): Promise<{ ok: boolean }> =>
+  api(`/strategy/snapshots/${id}`, { method: "DELETE" });
+
 export interface ApiFilters {
   dateRange?: "24h" | "7d" | "30d" | "90d";
   squad?: string;

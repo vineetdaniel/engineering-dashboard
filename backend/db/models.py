@@ -56,6 +56,16 @@ class ConnectorConfig(Base):
     updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)
 
 
+class StrategySnapshot(Base):
+    __tablename__ = "strategy_snapshots"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=True)
+    snapshot = Column(JSON, default=dict, nullable=False)
+    health_score = Column(Float, nullable=True)
+    action_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, index=True)
+
+
 # Indexes that support the per-developer productivity rollups. The `meta`
 # column is JSON, so we index its extracted text fields. These are functional
 # B-tree indexes partial-filtered by source to stay small. Idempotent.
