@@ -239,7 +239,7 @@ class IntelligenceSignal(BaseModel):
     section: str
     label: str
     value: Optional[float]
-    value_text: Optional[str]
+    value_text: Optional[str] = None
     unit: Optional[str] = None
     trend: Optional[str] = None
     status: str
