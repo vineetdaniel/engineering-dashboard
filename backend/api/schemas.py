@@ -126,3 +126,45 @@ class ComplianceUploadOut(BaseModel):
     metrics: int
     events: int
     errors: List[str]
+
+
+class ApiFilters(BaseModel):
+    dateRange: Optional[str] = None
+    squad: Optional[str] = None
+    environment: Optional[str] = None
+
+
+class StrategyGoals(BaseModel):
+    six_month: str
+    quarterly: str
+    weekly: str
+    ai_strategy_focus: str
+    top_risks: str
+    growth_levers: str
+    team_capacity_notes: str
+
+
+class StrategySaveIn(BaseModel):
+    goals: StrategyGoals
+
+
+class StrategyOut(BaseModel):
+    goals: StrategyGoals
+    updated_at: Optional[datetime] = None
+
+
+class StrategyActionItem(BaseModel):
+    id: str
+    title: str
+    rationale: str
+    section: str
+    priority: str
+    owner: Optional[str] = None
+    due_hint: Optional[str] = None
+
+
+class StrategyGenerateOut(BaseModel):
+    narrative: str
+    action_items: List[StrategyActionItem]
+    data_driven: bool
+    llm_enhanced: bool
