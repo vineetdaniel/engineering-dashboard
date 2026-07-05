@@ -64,6 +64,7 @@ class StrategySnapshot(Base):
     health_score = Column(Float, nullable=True)
     action_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=dt.datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)
 
 
 # Indexes that support the per-developer productivity rollups. The `meta`
