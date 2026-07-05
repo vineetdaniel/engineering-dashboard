@@ -193,10 +193,25 @@ class GoalMetricCard(BaseModel):
     weight: float
 
 
+class InitiativeBucket(BaseModel):
+    id: str
+    key: str
+    label: str
+    description: str
+    status: str
+    open_items: int
+    critical_items: int
+    high_items: int
+    near_term_items: int
+    action_ids: List[str]
+    sections: List[str]
+
+
 class StrategyGenerateOut(BaseModel):
     narrative: str
     action_items: List[StrategyActionItem]
     health_score: HealthScoreOut
     goal_cards: List[GoalMetricCard]
+    initiative_portfolio: List[InitiativeBucket]
     data_driven: bool
     llm_enhanced: bool

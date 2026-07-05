@@ -699,16 +699,159 @@ def _llm_narrative(goals: Dict[str, str], metrics: List[Dict[str, Any]], events:
     return _claude_narrative(prompt) or _openai_narrative(prompt)
 
 
+INITIATIVE_BUCKETS: Dict[str, Dict[str, Any]] = {
+    "platform_reliability": {
+        "label": "Platform Reliability",
+        "description": "Keep the engineering floor solid: uptime, incidents, CVEs, and change safety.",
+        "sections": {"operations", "security", "engineering"},
+        "keywords": {"uptime", "incident", "cve", "vulnerability", "mttr", "change failure", "patch", "dependabot"},
+    },
+    "delivery_velocity": {
+        "label": "Delivery Velocity",
+        "description": "Unblock teams and protect sustainable throughput.",
+        "sections": {"engineering", "product"},
+        "keywords": {"pr", "pull request", "blocked ticket", "bug triage", "sla", "cycle time", "sprint"},
+    },
+    "payments_fintech": {
+        "label": "Payments & Fintech",
+        "description": "Protect revenue, fraud controls, and payment experience.",
+        "sections": {"payments"},
+        "keywords": {"payment success", "fraud", "chargeback", "decline", "gateway", "txn"},
+    },
+    "cost_efficiency": {
+        "label": "Cost Efficiency",
+        "description": "Cloud spend discipline and unit economics.",
+        "sections": {"cost"},
+        "keywords": {"cloud", "budget", "cost", "spend", "forecast", "unit economics"},
+    },
+    "compliance_governance": {
+        "label": "Compliance & Governance",
+        "description": "Audit readiness, controls, and risk registers.",
+        "sections": {"compliance", "security"},
+        "keywords": {"compliance", "control", "audit", "risk register", "framework", "evidence"},
+    },
+    "ai_strategy": {
+        "label": "AI Strategy",
+        "description": "Safe, measurable AI bets and readiness.",
+        "sections": {"strategy", "engineering"},
+        "keywords": {"ai", "ml", "copilot", "model", "inference", "hallucination", "data pipeline"},
+    },
+    "team_capacity": {
+        "label": "Team Capacity",
+        "description": "Hiring, skill gaps, and org readiness to execute.",
+        "sections": {"team"},
+        "keywords": {"hiring", "capacity", "skill gap", "vacancy", "team"},
+    },
+    "growth_levers": {
+        "label": "Growth Levers",
+        "description": "Revenue and expansion initiatives with owners and metrics.",
+        "sections": {"strategy", "payments"},
+        "keywords": {"growth", "market", "geo", "partnership", "revenue", "lever"},
+    },
+}
+
+
+def _score_action_against_bucket(action: Dict[str, Any], bucket: Dict[str, Any]) -> float:
+    score = 0.0
+    text = f"{action.get('title', '')} {action.get('rationale', '')} {action.get('section', '')}".lower()
+    if action.get("section") in bucket["sections"]:
+        score += 2.0
+    for keyword in bucket["keywords"]:
+        if keyword in text:
+            score += 1.0
+    return score
+
+
+def _build_initiative_portfolio(
+    action_items: List[Dict[str, Any]],
+    goals: Dict[str, str],
+    metrics: List[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Group action items into named initiative buckets with a status summary."""
+    # Assign each action to its highest-scoring bucket.
+    assignments: Dict[str, List[Dict[str, Any]]] = {key: [] for key in INITIATIVE_BUCKETS}
+    for action in action_items:
+        scores = [(key, _score_action_against_bucket(action, bucket)) for key, bucket in INITIATIVE_BUCKETS.items()]
+        scores.sort(key=lambda x: x[1], reverse=True)
+        best_key, best_score = scores[0]
+        if best_score > 0:
+            assignments[best_key].append(action)
+
+    # Always include buckets explicitly mentioned in goals even if empty.
+    goal_text = " ".join(goals.values()).lower()
+    keyword_to_bucket = {
+        "ai": "ai_strategy",
+        "ml": "ai_strategy",
+        "copilot": "ai_strategy",
+        "hiring": "team_capacity",
+        "vacancy": "team_capacity",
+        "capacity": "team_capacity",
+        "risk": "compliance_governance",
+        "compliance": "compliance_governance",
+        "growth": "growth_levers",
+        "market": "growth_levers",
+    }
+    for keyword, bucket_key in keyword_to_bucket.items():
+        if keyword in goal_text:
+            assignments.setdefault(bucket_key, [])
+
+    # Score a bucket status from its action items and related signals.
+    def bucket_status(actions: List[Dict[str, Any]]) -> str:
+        if not actions:
+            return "tracking"
+        priorities = [a.get("priority", "medium") for a in actions]
+        if "critical" in priorities:
+            return "critical"
+        if "high" in priorities:
+            return "at_risk"
+        return "healthy"
+
+    portfolio: List[Dict[str, Any]] = []
+    for key, bucket in INITIATIVE_BUCKETS.items():
+        actions = assignments.get(key, [])
+        status = bucket_status(actions)
+        open_count = len(actions)
+        critical_count = sum(1 for a in actions if a.get("priority") == "critical")
+        high_count = sum(1 for a in actions if a.get("priority") == "high")
+
+        # Compute a completion proxy: items due this week or 48 hours likely short-term.
+        near_term = sum(
+            1
+            for a in actions
+            if a.get("due_hint") in ("this week", "48 hours", "24 hours")
+        )
+
+        portfolio.append({
+            "id": f"initiative-{key}",
+            "key": key,
+            "label": bucket["label"],
+            "description": bucket["description"],
+            "status": status,
+            "open_items": open_count,
+            "critical_items": critical_count,
+            "high_items": high_count,
+            "near_term_items": near_term,
+            "action_ids": [a.get("id") for a in actions],
+            "sections": sorted(bucket["sections"]),
+        })
+
+    # Order: critical first, then by total open items, then label.
+    priority_order = {"critical": 0, "at_risk": 1, "healthy": 2, "tracking": 3}
+    portfolio.sort(key=lambda p: (priority_order.get(p["status"], 2), -p["open_items"], p["label"]))
+    return portfolio
+
+
 def build_strategy(
     goals: Dict[str, str],
     metrics: List[Dict[str, Any]],
     events: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Return strategy action items, narrative, health score, and goal-metric cards.
+    """Return strategy action items, narrative, health score, goal cards, and initiative portfolio.
 
     If an LLM key is configured, the narrative is LLM-enhanced; otherwise a
-    rule-based narrative is returned. Action items and goal cards are always
-    rule-based so they are deterministic and auditable.
+    rule-based narrative is returned. Action items, goal cards, and portfolio
+    are always rule-based so they are deterministic and auditable.
     """
     action_items = _derive_action_items(goals, metrics, events)
     llm_text = _llm_narrative(goals, metrics, events)
@@ -716,12 +859,14 @@ def build_strategy(
     narrative = llm_text or _default_narrative(goals, metrics, events)
     health_score = _compute_health_score(goals, metrics, events)
     goal_cards = _compute_goal_cards(goals, metrics, events)
+    initiative_portfolio = _build_initiative_portfolio(action_items, goals, metrics, events)
 
     return {
         "narrative": narrative,
         "action_items": action_items,
         "health_score": health_score,
         "goal_cards": goal_cards,
+        "initiative_portfolio": initiative_portfolio,
         "data_driven": True,
         "llm_enhanced": llm_enhanced,
     }
