@@ -124,6 +124,18 @@ export interface StrategyGenerateOut {
   llm_enhanced: boolean;
 }
 
+export interface WhatIfScenarioOut {
+  metric_overrides: Record<string, number | null>;
+  event_overrides: Record<string, number | null>;
+  baseline_health_score: HealthScore;
+  scenario_health_score: HealthScore;
+  baseline_action_count: number;
+  scenario_action_count: number;
+  new_action_items: StrategyActionItem[];
+  removed_action_items: StrategyActionItem[];
+  scenario: StrategyGenerateOut;
+}
+
 export const getStrategy = (): Promise<StrategyOut> => api("/strategy");
 
 export const saveStrategy = (goals: StrategyGoals): Promise<StrategyOut> =>
@@ -138,6 +150,23 @@ export const generateStrategy = (filters?: ApiFilters): Promise<StrategyGenerate
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      dateRange: filters?.dateRange || null,
+      squad: filters?.squad === "all" ? null : filters?.squad,
+      environment: filters?.environment === "all" ? null : filters?.environment,
+    }),
+  });
+
+export const generateWhatIf = (
+  metricOverrides: Record<string, number | null>,
+  eventOverrides: Record<string, number | null>,
+  filters?: ApiFilters
+): Promise<WhatIfScenarioOut> =>
+  api("/strategy/whatif", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      metric_overrides: metricOverrides,
+      event_overrides: eventOverrides,
       dateRange: filters?.dateRange || null,
       squad: filters?.squad === "all" ? null : filters?.squad,
       environment: filters?.environment === "all" ? null : filters?.environment,

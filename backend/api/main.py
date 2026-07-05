@@ -20,7 +20,7 @@ from backend.api.reports import generate_newsletter_pdf
 from backend.config import settings
 from backend.config_store import get_connector_config, list_connector_configs, mask_secrets, set_connector_config
 from backend.db.models import init_db, get_db, Metric, Event, ConnectorConfig
-from backend.strategy.engine import build_strategy
+from backend.strategy.engine import build_strategy, build_what_if_scenario
 from backend.db.seed import seed_if_empty
 from backend.mcp.integrations import CONNECTORS
 
@@ -257,6 +257,53 @@ async def generate_strategy(
         events=[schemas.EventOut.model_validate(e).model_dump() for e in events],
     )
     return schemas.StrategyGenerateOut(**result)
+
+
+@app.post("/strategy/whatif", response_model=schemas.WhatIfScenarioOut)
+async def what_if_strategy(
+    body: schemas.WhatIfScenarioIn,
+    filters: schemas.ApiFilters | None = None,
+    db: Session = Depends(get_db),
+):
+    """Run a what-if scenario by overriding metrics and events, then compare outcomes.
+
+    Example body:
+    {
+      "metric_overrides": {"open_prs": 10, "payment_success_rate": 99.95},
+      "event_overrides": {"incident": -2, "dependabot_alert": 5}
+    }
+    """
+    strategy = _get_strategy_config(db)
+
+    q_metrics = db.query(Metric)
+    q_events = db.query(Event)
+    if filters and filters.dateRange:
+        window = parse_window(filters.dateRange)
+        if window:
+            q_metrics = q_metrics.filter(Metric.timestamp >= window)
+            q_events = q_events.filter(Event.happened_at >= window)
+    if filters and filters.squad and filters.squad != "all":
+        squad_filter = (Metric.entity.ilike(f"%{filters.squad}%")) | (
+            Metric.meta.cast(JSONB).op("@>")({"squad": filters.squad})
+        )
+        q_metrics = q_metrics.filter(squad_filter)
+    if filters and filters.environment and filters.environment != "all":
+        q_metrics = q_metrics.filter(Metric.meta.cast(JSONB).op("@>")({"environment": filters.environment}))
+
+    metrics = q_metrics.all()
+    events = q_events.all()
+
+    metric_overrides = {k: v for k, v in (body.metric_overrides or {}).items() if v is not None}
+    event_overrides = {k: v for k, v in (body.event_overrides or {}).items() if v is not None}
+
+    result = build_what_if_scenario(
+        goals=strategy.goals.model_dump(),
+        metrics=[schemas.MetricOut.model_validate(m).model_dump() for m in metrics],
+        events=[schemas.EventOut.model_validate(e).model_dump() for e in events],
+        metric_overrides=metric_overrides,
+        event_overrides=event_overrides,
+    )
+    return schemas.WhatIfScenarioOut(**result)
 
 
 @app.get("/connectors/health", response_model=schemas.ConnectorHealthResponse)
