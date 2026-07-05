@@ -842,24 +842,89 @@ def _build_initiative_portfolio(
     return portfolio
 
 
+def _apply_metric_overrides(
+    metrics: List[Dict[str, Any]],
+    overrides: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    """Return a shallow copy of metrics with selected metric_type values overridden."""
+    overridden: List[Dict[str, Any]] = []
+    for m in metrics:
+        metric_type = m.get("metric_type")
+        if metric_type and metric_type in overrides:
+            clone = dict(m)
+            clone["value"] = overrides[metric_type]
+            overridden.append(clone)
+        else:
+            overridden.append(m)
+    return overridden
+
+
+def _apply_event_overrides(
+    events: List[Dict[str, Any]],
+    overrides: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    """Adjust event counts by injecting/removing synthetic placeholder events.
+
+    Positive delta adds synthetic unresolved events; negative delta removes
+    matching events up to the requested count. This keeps the downstream
+    scoring deterministic and simple.
+    """
+    adjusted = list(events)
+    for event_type, delta in overrides.items():
+        if delta == 0:
+            continue
+        if delta > 0:
+            now = datetime.utcnow().isoformat()
+            for i in range(delta):
+                adjusted.append({
+                    "source": "whatif",
+                    "event_type": event_type,
+                    "entity": "whatif",
+                    "title": f"Synthetic {event_type} {i+1}",
+                    "severity": "medium",
+                    "status": "open",
+                    "meta": {"whatif": True},
+                    "happened_at": now,
+                })
+        else:
+            to_remove = abs(delta)
+            remaining: List[Dict[str, Any]] = []
+            removed = 0
+            for e in adjusted:
+                if removed < to_remove and e.get("event_type") == event_type and not e.get("meta", {}).get("whatif"):
+                    removed += 1
+                    continue
+                remaining.append(e)
+            adjusted = remaining
+    return adjusted
+
+
 def build_strategy(
     goals: Dict[str, str],
     metrics: List[Dict[str, Any]],
     events: List[Dict[str, Any]],
+    metric_overrides: Optional[Dict[str, float]] = None,
+    event_overrides: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Return strategy action items, narrative, health score, goal cards, and initiative portfolio.
 
     If an LLM key is configured, the narrative is LLM-enhanced; otherwise a
     rule-based narrative is returned. Action items, goal cards, and portfolio
     are always rule-based so they are deterministic and auditable.
+
+    Optional metric_overrides and event_overrides power the What-If scenario
+    mode without mutating persisted data.
     """
-    action_items = _derive_action_items(goals, metrics, events)
-    llm_text = _llm_narrative(goals, metrics, events)
+    effective_metrics = _apply_metric_overrides(metrics, metric_overrides or {})
+    effective_events = _apply_event_overrides(events, event_overrides or {})
+
+    action_items = _derive_action_items(goals, effective_metrics, effective_events)
+    llm_text = _llm_narrative(goals, effective_metrics, effective_events)
     llm_enhanced = bool(llm_text)
-    narrative = llm_text or _default_narrative(goals, metrics, events)
-    health_score = _compute_health_score(goals, metrics, events)
-    goal_cards = _compute_goal_cards(goals, metrics, events)
-    initiative_portfolio = _build_initiative_portfolio(action_items, goals, metrics, events)
+    narrative = llm_text or _default_narrative(goals, effective_metrics, effective_events)
+    health_score = _compute_health_score(goals, effective_metrics, effective_events)
+    goal_cards = _compute_goal_cards(goals, effective_metrics, effective_events)
+    initiative_portfolio = _build_initiative_portfolio(action_items, goals, effective_metrics, effective_events)
 
     return {
         "narrative": narrative,
@@ -869,4 +934,33 @@ def build_strategy(
         "initiative_portfolio": initiative_portfolio,
         "data_driven": True,
         "llm_enhanced": llm_enhanced,
+    }
+
+
+def build_what_if_scenario(
+    goals: Dict[str, str],
+    metrics: List[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+    metric_overrides: Dict[str, float],
+    event_overrides: Dict[str, int],
+) -> Dict[str, Any]:
+    """Return a baseline + scenario comparison for the What-If mode.
+
+    The baseline uses real data; the scenario uses overridden metric/event
+    values. The delta highlights how the strategy health score and initiative
+    portfolio shift under the hypothetical conditions.
+    """
+    baseline = build_strategy(goals, metrics, events)
+    scenario = build_strategy(goals, metrics, events, metric_overrides, event_overrides)
+
+    return {
+        "metric_overrides": metric_overrides,
+        "event_overrides": event_overrides,
+        "baseline_health_score": baseline["health_score"],
+        "scenario_health_score": scenario["health_score"],
+        "baseline_action_count": len(baseline["action_items"]),
+        "scenario_action_count": len(scenario["action_items"]),
+        "new_action_items": [a for a in scenario["action_items"] if a["id"] not in {x["id"] for x in baseline["action_items"]}],
+        "removed_action_items": [a for a in baseline["action_items"] if a["id"] not in {x["id"] for x in scenario["action_items"]}],
+        "scenario": scenario,
     }

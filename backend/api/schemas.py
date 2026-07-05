@@ -207,7 +207,31 @@ class InitiativeBucket(BaseModel):
     sections: List[str]
 
 
+class WhatIfScenarioIn(BaseModel):
+    metric_overrides: Optional[Dict[str, Optional[float]]] = None
+    event_overrides: Optional[Dict[str, Optional[int]]] = None
+
+
 class StrategyGenerateOut(BaseModel):
+    narrative: str
+    action_items: List[StrategyActionItem]
+    health_score: HealthScoreOut
+    goal_cards: List[GoalMetricCard]
+    initiative_portfolio: List[InitiativeBucket]
+    data_driven: bool
+    llm_enhanced: bool
+
+
+class WhatIfScenarioOut(BaseModel):
+    metric_overrides: Dict[str, Optional[float]]
+    event_overrides: Dict[str, Optional[int]]
+    baseline_health_score: HealthScoreOut
+    scenario_health_score: HealthScoreOut
+    baseline_action_count: int
+    scenario_action_count: int
+    new_action_items: List[StrategyActionItem]
+    removed_action_items: List[StrategyActionItem]
+    scenario: StrategyGenerateOut
     narrative: str
     action_items: List[StrategyActionItem]
     health_score: HealthScoreOut
