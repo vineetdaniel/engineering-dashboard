@@ -61,6 +61,148 @@ def _action(
     }
 
 
+def _clamp(value: float, low: float = 0, high: float = 100) -> float:
+    return max(low, min(high, value))
+
+
+def _compute_health_score(
+    goals: Dict[str, str],
+    metrics: List[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Return a composite strategy health score with per-dimension breakdowns.
+
+    Dimensions:
+    - operational (35%): incidents + CVEs + uptime
+    - delivery (25%): open PRs + bugs + blocked tickets
+    - payments (20%): payment success + fraud rate
+    - cost (10%): cloud spend vs budget
+    - goals (10%): how clearly strategy aims are defined
+    """
+    # --- Operational ---
+    active_incidents = len(_active(events, "incident"))
+    critical_cves = len([e for e in events if e.get("event_type") == "dependabot_alert" and e.get("severity") in ("critical", "high")])
+    uptime_metric = _pick(metrics, "uptime_pct")
+    uptime = uptime_metric.get("value") if uptime_metric else None
+
+    # Incident score: 0 incidents = 100, 30+ = 0
+    incident_score = _clamp(100 - (active_incidents * 3.33))
+    # CVE score: 0 critical/high = 100, 100+ = 0
+    cve_score = _clamp(100 - critical_cves)
+    # Uptime score: 99.99% = 100, 95% = 0
+    uptime_score = _clamp(((uptime - 95) / (99.99 - 95)) * 100) if uptime else 50.0
+
+    operational_score = _clamp((incident_score * 0.4) + (cve_score * 0.35) + (uptime_score * 0.25))
+
+    # --- Delivery ---
+    open_prs = int(_sum_recent(metrics, "open_prs"))
+    open_bugs = int(_sum_recent(metrics, "open_bugs"))
+    blocked_tickets = len(_active(events, "blocked_ticket"))
+
+    # PR score: 0 = 100, 3000 = 0
+    pr_score = _clamp(100 - (open_prs / 30))
+    # Bug score: 0 = 100, 100 = 0
+    bug_score = _clamp(100 - open_bugs)
+    # Blocked score: 0 = 100, 20 = 0
+    blocked_score = _clamp(100 - (blocked_tickets * 5))
+
+    delivery_score = _clamp((pr_score * 0.4) + (bug_score * 0.35) + (blocked_score * 0.25))
+
+    # --- Payments ---
+    payment_success_metric = _pick(metrics, "payment_success_rate")
+    payment_success = payment_success_metric.get("value") if payment_success_metric else None
+    fraud_metric = _pick(metrics, "fraud_rate")
+    fraud_rate = fraud_metric.get("value") if fraud_metric else None
+
+    # Payment success score: 99.99% = 100, 95% = 0
+    payment_score = _clamp(((payment_success - 95) / (99.99 - 95)) * 100) if payment_success else 50.0
+    # Fraud score: 0% = 100, 2% = 0
+    fraud_score = _clamp(100 - (fraud_rate * 50)) if fraud_rate else 80.0
+
+    payments_score = _clamp((payment_score * 0.7) + (fraud_score * 0.3))
+
+    # --- Cost ---
+    cloud_spend_metric = _pick(metrics, "cloud_spend_mtd")
+    budget_metric = next((m for m in metrics if m.get("metric_type") == "monthly_budget"), None)
+    if cloud_spend_metric and budget_metric and budget_metric.get("value"):
+        spend = float(cloud_spend_metric.get("value") or 0)
+        budget = float(budget_metric.get("value") or 1)
+        spend_pct = spend / budget * 100
+        # <= 80% budget = 100, 120%+ = 0
+        cost_score = _clamp(100 - ((spend_pct - 80) * 2.5))
+    else:
+        cost_score = 75.0
+
+    # --- Goals clarity ---
+    goal_fields = ["six_month", "quarterly", "weekly", "ai_strategy_focus"]
+    filled = sum(1 for f in goal_fields if _extract_text(goals, f))
+    goals_score = _clamp((filled / len(goal_fields)) * 100)
+
+    # --- Composite ---
+    composite = _clamp(
+        operational_score * 0.35
+        + delivery_score * 0.25
+        + payments_score * 0.20
+        + cost_score * 0.10
+        + goals_score * 0.10
+    )
+
+    def label(score: float) -> str:
+        if score >= 80:
+            return "healthy"
+        if score >= 60:
+            return "at risk"
+        if score >= 40:
+            return "critical"
+        return "alarm"
+
+    return {
+        "score": round(composite, 1),
+        "label": label(composite),
+        "dimensions": {
+            "operational": {
+                "score": round(operational_score, 1),
+                "label": label(operational_score),
+                "signals": {
+                    "active_incidents": active_incidents,
+                    "critical_cves": critical_cves,
+                    "uptime": uptime,
+                },
+            },
+            "delivery": {
+                "score": round(delivery_score, 1),
+                "label": label(delivery_score),
+                "signals": {
+                    "open_prs": open_prs,
+                    "open_bugs": open_bugs,
+                    "blocked_tickets": blocked_tickets,
+                },
+            },
+            "payments": {
+                "score": round(payments_score, 1),
+                "label": label(payments_score),
+                "signals": {
+                    "payment_success_rate": payment_success,
+                    "fraud_rate": fraud_rate,
+                },
+            },
+            "cost": {
+                "score": round(cost_score, 1),
+                "label": label(cost_score),
+                "signals": {
+                    "cloud_spend_mtd": cloud_spend_metric.get("value") if cloud_spend_metric else None,
+                    "monthly_budget": budget_metric.get("value") if budget_metric else None,
+                },
+            },
+            "goals": {
+                "score": round(goals_score, 1),
+                "label": label(goals_score),
+                "signals": {"filled_fields": filled, "total_fields": len(goal_fields)},
+            },
+        },
+    }
+
+
 def _derive_action_items(goals: Dict[str, str], metrics: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = []
 
@@ -436,9 +578,12 @@ def build_strategy(
     llm_text = _llm_narrative(goals, metrics, events)
     llm_enhanced = bool(llm_text)
     narrative = llm_text or _default_narrative(goals, metrics, events)
+    health_score = _compute_health_score(goals, metrics, events)
+
     return {
         "narrative": narrative,
         "action_items": action_items,
+        "health_score": health_score,
         "data_driven": True,
         "llm_enhanced": llm_enhanced,
     }

@@ -163,8 +163,21 @@ class StrategyActionItem(BaseModel):
     due_hint: Optional[str] = None
 
 
+class HealthScoreDimension(BaseModel):
+    score: float
+    label: str
+    signals: Dict[str, Any]
+
+
+class HealthScoreOut(BaseModel):
+    score: float
+    label: str
+    dimensions: Dict[str, HealthScoreDimension]
+
+
 class StrategyGenerateOut(BaseModel):
     narrative: str
     action_items: List[StrategyActionItem]
+    health_score: HealthScoreOut
     data_driven: bool
     llm_enhanced: bool

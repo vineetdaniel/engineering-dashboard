@@ -18,6 +18,7 @@ import {
   type StrategyActionItem,
   type StrategyGenerateOut,
 } from "@/lib/api";
+import { StrategyHealthScore } from "@/components/widgets/StrategyHealthScore";
 
 const emptyGoals: StrategyGoals = {
   six_month: "",
@@ -320,41 +321,48 @@ export function StrategySection({
       {/* Generated output */}
       {result && (
         <div className="space-y-5">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={18} className="text-primary" />
-                  <CardTitle>CTO Strategy Narrative</CardTitle>
-                </div>
-                <div className="flex gap-2">
-                  {result.llm_enhanced && (
-                    <Badge variant="info">LLM enhanced</Badge>
-                  )}
-                  <Badge variant={result.data_driven ? "success" : "secondary"}>
-                    {result.data_driven ? "Data-driven" : "Goal-based"}
-                  </Badge>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="prose dark:prose-invert max-w-none text-sm">
-                {result.narrative.split("\n\n").map((para, idx) => (
-                  <p key={idx} className="mb-3 last:mb-0">
-                    {para.startsWith("**") && para.includes("**")
-                      ? para.split("**").map((part, i) =>
-                          i % 2 === 1 ? (
-                            <strong key={i} className="text-foreground">{part}</strong>
-                          ) : (
-                            <span key={i}>{part}</span>
-                          )
-                        )
-                      : para}
-                  </p>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <div className="lg:col-span-1">
+              <StrategyHealthScore healthScore={result.health_score} />
+            </div>
+            <div className="lg:col-span-2">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={18} className="text-primary" />
+                      <CardTitle>CTO Strategy Narrative</CardTitle>
+                    </div>
+                    <div className="flex gap-2">
+                      {result.llm_enhanced && (
+                        <Badge variant="info">LLM enhanced</Badge>
+                      )}
+                      <Badge variant={result.data_driven ? "success" : "secondary"}>
+                        {result.data_driven ? "Data-driven" : "Goal-based"}
+                      </Badge>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="prose dark:prose-invert max-w-none text-sm">
+                    {result.narrative.split("\n\n").map((para, idx) => (
+                      <p key={idx} className="mb-3 last:mb-0">
+                        {para.startsWith("**") && para.includes("**")
+                          ? para.split("**").map((part, i) =>
+                              i % 2 === 1 ? (
+                                <strong key={i} className="text-foreground">{part}</strong>
+                              ) : (
+                                <span key={i}>{part}</span>
+                              )
+                            )
+                          : para}
+                      </p>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {result.action_items.map((item) => (
