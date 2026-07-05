@@ -306,6 +306,157 @@ async def what_if_strategy(
     return schemas.WhatIfScenarioOut(**result)
 
 
+@app.get("/strategy/intelligence", response_model=schemas.IntelligencePanelOut)
+async def strategy_intelligence(
+    filters: schemas.ApiFilters | None = None,
+    db: Session = Depends(get_db),
+):
+    """Pull live cross-section signals into the Strategy section.
+
+    Returns a curated set of metrics from engineering, payments, cost, security,
+    and operations so the strategy view can show a unified CTO-level dashboard
+    without leaving the page.
+    """
+    q_metrics = db.query(Metric)
+    q_events = db.query(Event)
+    if filters and filters.dateRange:
+        window = parse_window(filters.dateRange)
+        if window:
+            q_metrics = q_metrics.filter(Metric.timestamp >= window)
+            q_events = q_events.filter(Event.happened_at >= window)
+    if filters and filters.squad and filters.squad != "all":
+        squad_filter = (Metric.entity.ilike(f"%{filters.squad}%")) | (
+            Metric.meta.cast(JSONB).op("@>")({"squad": filters.squad})
+        )
+        q_metrics = q_metrics.filter(squad_filter)
+    if filters and filters.environment and filters.environment != "all":
+        q_metrics = q_metrics.filter(Metric.meta.cast(JSONB).op("@>")({"environment": filters.environment}))
+
+    metrics = q_metrics.all()
+    events = q_events.all()
+    now = datetime.utcnow()
+
+    def pick(metric_type: str) -> Metric | None:
+        matches = [m for m in metrics if m.metric_type == metric_type]
+        if not matches:
+            return None
+        return max(matches, key=lambda m: m.timestamp or datetime.min)
+
+    def value(metric_type: str) -> float | None:
+        m = pick(metric_type)
+        return m.value if m else None
+
+    def status_from_up(value: float | None, good: float, warn: float) -> str:
+        if value is None:
+            return "unknown"
+        if value >= good:
+            return "healthy"
+        if value >= warn:
+            return "at_risk"
+        return "critical"
+
+    def status_from_down(value: float | None, good: float, warn: float) -> str:
+        if value is None:
+            return "unknown"
+        if value <= good:
+            return "healthy"
+        if value <= warn:
+            return "at_risk"
+        return "critical"
+
+    open_prs = value("open_prs")
+    open_bugs = value("open_bugs")
+    uptime = value("uptime_pct")
+    payment_success = value("payment_success_rate")
+    fraud_rate = value("fraud_rate")
+    cloud_spend = value("cloud_spend_mtd")
+    mttr = value("mttr_minutes")
+    cfr = value("change_failure_rate")
+
+    active_incidents = len([e for e in events if e.event_type == "incident" and e.status != "resolved"])
+    critical_cves = len([
+        e for e in events
+        if e.event_type == "dependabot_alert" and e.severity in ("critical", "high")
+    ])
+    failed_controls = len([e for e in events if e.event_type == "compliance_finding"])
+    blocked_tickets = len([e for e in events if e.event_type == "blocked_ticket" and e.status != "resolved"])
+
+    # Infer trend from seed vs recent when available; default flat.
+    def trend(metric_type: str) -> str | None:
+        vals = sorted([m.value for m in metrics if m.metric_type == metric_type and m.value is not None])
+        if len(vals) < 2:
+            return None
+        return "up" if vals[-1] > vals[-2] else "down" if vals[-1] < vals[-2] else "flat"
+
+    signals = [
+        schemas.IntelligenceSignal(
+            id="eng-open-prs", section="engineering", label="Open PRs",
+            value=open_prs, unit="PRs", status=status_from_down(open_prs, 20, 50),
+            source_metric_type="open_prs", trend=trend("open_prs"),
+        ),
+        schemas.IntelligenceSignal(
+            id="eng-open-bugs", section="engineering", label="Open bugs",
+            value=open_bugs, unit="bugs", status=status_from_down(open_bugs, 20, 50),
+            source_metric_type="open_bugs", trend=trend("open_bugs"),
+        ),
+        schemas.IntelligenceSignal(
+            id="ops-uptime", section="operations", label="Uptime",
+            value=uptime, unit="%", status=status_from_up(uptime, 99.99, 99.9),
+            source_metric_type="uptime_pct", trend=trend("uptime_pct"),
+        ),
+        schemas.IntelligenceSignal(
+            id="ops-active-incidents", section="operations", label="Active incidents",
+            value=active_incidents, unit="incidents", status=status_from_down(active_incidents, 0, 3),
+            source_event_type="incident", trend=None,
+        ),
+        schemas.IntelligenceSignal(
+            id="ops-mttr", section="operations", label="MTTR",
+            value=mttr, unit="min", status=status_from_down(mttr, 30, 60),
+            source_metric_type="mttr_minutes", trend=trend("mttr_minutes"),
+        ),
+        schemas.IntelligenceSignal(
+            id="ops-cfr", section="operations", label="Change failure rate",
+            value=cfr, unit="%", status=status_from_down(cfr, 10, 15),
+            source_metric_type="change_failure_rate", trend=trend("change_failure_rate"),
+        ),
+        schemas.IntelligenceSignal(
+            id="payments-success", section="payments", label="Payment success rate",
+            value=payment_success, unit="%", status=status_from_up(payment_success, 99.9, 99.5),
+            source_metric_type="payment_success_rate", trend=trend("payment_success_rate"),
+        ),
+        schemas.IntelligenceSignal(
+            id="payments-fraud", section="payments", label="Fraud rate",
+            value=fraud_rate, unit="%", status=status_from_down(fraud_rate, 0.5, 1.0),
+            source_metric_type="fraud_rate", trend=trend("fraud_rate"),
+        ),
+        schemas.IntelligenceSignal(
+            id="cost-spend", section="cost", label="Cloud spend MTD",
+            value=cloud_spend, unit="$", status=status_from_down(cloud_spend, 50000, 80000),
+            source_metric_type="cloud_spend_mtd", trend=trend("cloud_spend_mtd"),
+        ),
+        schemas.IntelligenceSignal(
+            id="security-cves", section="security", label="Critical/high CVEs",
+            value=critical_cves, unit="CVEs", status=status_from_down(critical_cves, 0, 5),
+            source_event_type="dependabot_alert", trend=None,
+        ),
+        schemas.IntelligenceSignal(
+            id="compliance-findings", section="compliance", label="Failed controls",
+            value=failed_controls, unit="controls", status=status_from_down(failed_controls, 0, 3),
+            source_event_type="compliance_finding", trend=None,
+        ),
+        schemas.IntelligenceSignal(
+            id="product-blocked", section="product", label="Blocked tickets",
+            value=blocked_tickets, unit="tickets", status=status_from_down(blocked_tickets, 3, 10),
+            source_event_type="blocked_ticket", trend=None,
+        ),
+    ]
+
+    return schemas.IntelligencePanelOut(
+        updated_at=now,
+        signals=signals,
+    )
+
+
 @app.get("/connectors/health", response_model=schemas.ConnectorHealthResponse)
 async def connectors_health(db: Session = Depends(get_db)):
     async def check_one(name: str):

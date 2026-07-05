@@ -232,10 +232,21 @@ class WhatIfScenarioOut(BaseModel):
     new_action_items: List[StrategyActionItem]
     removed_action_items: List[StrategyActionItem]
     scenario: StrategyGenerateOut
-    narrative: str
-    action_items: List[StrategyActionItem]
-    health_score: HealthScoreOut
-    goal_cards: List[GoalMetricCard]
-    initiative_portfolio: List[InitiativeBucket]
-    data_driven: bool
-    llm_enhanced: bool
+
+
+class IntelligenceSignal(BaseModel):
+    id: str
+    section: str
+    label: str
+    value: Optional[float]
+    value_text: Optional[str]
+    unit: Optional[str] = None
+    trend: Optional[str] = None
+    status: str
+    source_metric_type: Optional[str] = None
+    source_event_type: Optional[str] = None
+
+
+class IntelligencePanelOut(BaseModel):
+    updated_at: Optional[datetime] = None
+    signals: List[IntelligenceSignal]
