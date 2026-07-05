@@ -65,6 +65,142 @@ def _clamp(value: float, low: float = 0, high: float = 100) -> float:
     return max(low, min(high, value))
 
 
+GOAL_CARD_TEMPLATES: List[Dict[str, Any]] = [
+    {
+        "goal_key": "six_month",
+        "title": "6-month strategic aim",
+        "target": "Define and hit a clear 6-month business outcome",
+        "metric_type": "uptime_pct",
+        "direction": "up",
+        "threshold": 99.99,
+        "section": "strategy",
+        "weight": 0.20,
+    },
+    {
+        "goal_key": "quarterly",
+        "title": "Quarterly focus",
+        "target": "Ship quarterly bets with high quality",
+        "metric_type": "change_failure_rate",
+        "direction": "down",
+        "threshold": 10.0,
+        "section": "engineering",
+        "weight": 0.20,
+    },
+    {
+        "goal_key": "weekly",
+        "title": "Weekly commitment",
+        "target": "Close blockers and maintain flow",
+        "metric_type": "open_prs",
+        "direction": "down",
+        "threshold": 20.0,
+        "section": "engineering",
+        "weight": 0.20,
+    },
+    {
+        "goal_key": "ai_strategy_focus",
+        "title": "AI strategy focus",
+        "target": "Progress AI bets safely",
+        "metric_type": "payment_success_rate",
+        "direction": "up",
+        "threshold": 99.9,
+        "section": "strategy",
+        "weight": 0.20,
+    },
+    {
+        "goal_key": "top_risks",
+        "title": "Top risks mitigated",
+        "target": "Reduce exposure on stated risks",
+        "metric_type": "compliance_control_status",
+        "direction": "up",
+        "threshold": 1.0,
+        "section": "security",
+        "weight": 0.10,
+    },
+    {
+        "goal_key": "growth_levers",
+        "title": "Growth levers",
+        "target": "Grow revenue-critical metrics",
+        "metric_type": "fraud_rate",
+        "direction": "down",
+        "threshold": 0.5,
+        "section": "payments",
+        "weight": 0.10,
+    },
+]
+
+
+def _compute_goal_cards(
+    goals: Dict[str, str],
+    metrics: List[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Build a measurable card for each strategic aim.
+
+    Each card binds an aim to a proxy metric from the data, computes current
+    progress vs target, and assigns an RAG status and owner hint.
+    """
+    cards: List[Dict[str, Any]] = []
+
+    for template in GOAL_CARD_TEMPLATES:
+        aim = _extract_text(goals, template["goal_key"])
+        if not aim:
+            continue
+
+        metric = _pick(metrics, template["metric_type"])
+        raw_value = metric.get("value") if metric else None
+        direction = template["direction"]
+        threshold = template["threshold"]
+
+        if raw_value is None:
+            progress = None
+            status = "unknown"
+            current = None
+        else:
+            current = float(raw_value)
+            if direction == "up":
+                progress = _clamp((current / threshold) * 100)
+                status = "on_track" if current >= threshold else "at_risk" if current >= threshold * 0.8 else "behind"
+            else:
+                # down metric: 0 is 100% progress, threshold is 0% progress
+                if current <= 0:
+                    progress = 100.0
+                elif current >= threshold:
+                    progress = 0.0
+                else:
+                    progress = _clamp((1 - (current / threshold)) * 100)
+                status = "on_track" if current <= threshold else "at_risk" if current <= threshold * 1.25 else "behind"
+
+        cards.append({
+            "id": f"goal-{template['goal_key']}",
+            "goal_key": template["goal_key"],
+            "title": template["title"],
+            "aim": aim,
+            "metric_type": template["metric_type"],
+            "metric_label": _METRIC_LABELS.get(template["metric_type"], template["metric_type"]),
+            "target": template["target"],
+            "target_value": threshold,
+            "direction": direction,
+            "current": round(current, 3) if current is not None else None,
+            "progress": round(progress, 1) if progress is not None else None,
+            "status": status,
+            "section": template["section"],
+            "owner": "CTO",
+            "weight": template["weight"],
+        })
+
+    return cards
+
+
+_METRIC_LABELS: Dict[str, str] = {
+    "uptime_pct": "Uptime",
+    "change_failure_rate": "Change failure rate",
+    "open_prs": "Open PRs",
+    "payment_success_rate": "Payment success rate",
+    "compliance_control_status": "Compliance control pass rate",
+    "fraud_rate": "Fraud rate",
+}
+
+
 def _compute_health_score(
     goals: Dict[str, str],
     metrics: List[Dict[str, Any]],
@@ -568,22 +704,24 @@ def build_strategy(
     metrics: List[Dict[str, Any]],
     events: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Return strategy action items and a CTO narrative.
+    """Return strategy action items, narrative, health score, and goal-metric cards.
 
-    If OPENAI_API_KEY is set, the narrative is LLM-enhanced; otherwise a
-    rule-based narrative is returned. Action items are always rule-based so
-    they are deterministic and auditable.
+    If an LLM key is configured, the narrative is LLM-enhanced; otherwise a
+    rule-based narrative is returned. Action items and goal cards are always
+    rule-based so they are deterministic and auditable.
     """
     action_items = _derive_action_items(goals, metrics, events)
     llm_text = _llm_narrative(goals, metrics, events)
     llm_enhanced = bool(llm_text)
     narrative = llm_text or _default_narrative(goals, metrics, events)
     health_score = _compute_health_score(goals, metrics, events)
+    goal_cards = _compute_goal_cards(goals, metrics, events)
 
     return {
         "narrative": narrative,
         "action_items": action_items,
         "health_score": health_score,
+        "goal_cards": goal_cards,
         "data_driven": True,
         "llm_enhanced": llm_enhanced,
     }
