@@ -19,7 +19,7 @@ from backend.api import schemas
 from backend.api.reports import generate_newsletter_pdf
 from backend.config import settings
 from backend.config_store import get_connector_config, list_connector_configs, mask_secrets, set_connector_config
-from backend.db.models import init_db, get_db, Metric, Event, ConnectorConfig
+from backend.db.models import init_db, get_db, Metric, Event, ConnectorConfig, StrategySnapshot
 from backend.strategy.engine import build_strategy, build_what_if_scenario
 from backend.db.seed import seed_if_empty
 from backend.mcp.integrations import CONNECTORS
@@ -223,12 +223,16 @@ async def save_strategy(payload: schemas.StrategySaveIn, db: Session = Depends(g
 @app.post("/strategy/generate", response_model=schemas.StrategyGenerateOut)
 async def generate_strategy(
     filters: schemas.ApiFilters | None = None,
+    save_snapshot: bool = True,
     db: Session = Depends(get_db),
 ):
     """Generate a CTO strategy narrative and action items from goals + live data.
 
     Accepts the same dateRange/squad/environment filters used elsewhere so the
     generated strategy reflects the currently selected data slice.
+
+    When save_snapshot is true (default), the generated output is persisted as a
+    date-stamped StrategySnapshot so it can be referenced later.
     """
     strategy = _get_strategy_config(db)
 
@@ -256,7 +260,19 @@ async def generate_strategy(
         metrics=[schemas.MetricOut.model_validate(m).model_dump() for m in metrics],
         events=[schemas.EventOut.model_validate(e).model_dump() for e in events],
     )
-    return schemas.StrategyGenerateOut(**result)
+    output = schemas.StrategyGenerateOut(**result)
+
+    if save_snapshot:
+        snapshot_title = f"Auto-save {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+        db.add(StrategySnapshot(
+            title=snapshot_title,
+            snapshot=output.model_dump(),
+            health_score=output.health_score.score,
+            action_count=len(output.action_items),
+        ))
+        db.commit()
+
+    return output
 
 
 @app.post("/strategy/whatif", response_model=schemas.WhatIfScenarioOut)
@@ -454,6 +470,70 @@ async def strategy_intelligence(
     return schemas.IntelligencePanelOut(
         updated_at=now,
         signals=signals,
+    )
+
+
+@app.post("/strategy/snapshots", response_model=schemas.StrategySnapshotOut)
+async def create_strategy_snapshot(
+    payload: schemas.StrategySnapshotIn,
+    generated: schemas.StrategyGenerateOut,
+    db: Session = Depends(get_db),
+):
+    """Persist a generated strategy output as a date-stamped snapshot."""
+    row = StrategySnapshot(
+        title=payload.title,
+        snapshot=generated.model_dump(),
+        health_score=generated.health_score.score,
+        action_count=len(generated.action_items),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _snapshot_out(row)
+
+
+@app.get("/strategy/snapshots", response_model=list[schemas.StrategySnapshotOut])
+async def list_strategy_snapshots(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """List saved strategy snapshots, newest first."""
+    rows = (
+        db.query(StrategySnapshot)
+        .order_by(StrategySnapshot.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_snapshot_out(r) for r in rows]
+
+
+@app.get("/strategy/snapshots/{snapshot_id}", response_model=schemas.StrategySnapshotOut)
+async def get_strategy_snapshot(snapshot_id: int, db: Session = Depends(get_db)):
+    row = db.query(StrategySnapshot).filter(StrategySnapshot.id == snapshot_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return _snapshot_out(row)
+
+
+@app.delete("/strategy/snapshots/{snapshot_id}")
+async def delete_strategy_snapshot(snapshot_id: int, db: Session = Depends(get_db)):
+    row = db.query(StrategySnapshot).filter(StrategySnapshot.id == snapshot_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+def _snapshot_out(row: StrategySnapshot) -> schemas.StrategySnapshotOut:
+    return schemas.StrategySnapshotOut(
+        id=row.id,
+        title=row.title,
+        snapshot=row.snapshot,
+        health_score=row.health_score,
+        action_count=row.action_count,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 

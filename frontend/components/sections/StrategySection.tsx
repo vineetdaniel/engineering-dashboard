@@ -23,6 +23,7 @@ import { GoalMetricCards } from "@/components/widgets/GoalMetricCards";
 import { InitiativePortfolio } from "@/components/widgets/InitiativePortfolio";
 import { WhatIfScenario } from "@/components/widgets/WhatIfScenario";
 import { CrossSectionIntelligence } from "@/components/widgets/CrossSectionIntelligence";
+import { StrategySnapshots } from "@/components/widgets/StrategySnapshots";
 
 const emptyGoals: StrategyGoals = {
   six_month: "",
@@ -382,6 +383,10 @@ export function StrategySection({
 
           <div className="grid grid-cols-1 gap-5">
             <WhatIfScenario filters={filters} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-5">
+            <StrategySnapshots currentResult={result} />
           </div>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
