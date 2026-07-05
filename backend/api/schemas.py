@@ -175,9 +175,28 @@ class HealthScoreOut(BaseModel):
     dimensions: Dict[str, HealthScoreDimension]
 
 
+class GoalMetricCard(BaseModel):
+    id: str
+    goal_key: str
+    title: str
+    aim: str
+    metric_type: str
+    metric_label: str
+    target: str
+    target_value: float
+    direction: str
+    current: Optional[float]
+    progress: Optional[float]
+    status: str
+    section: str
+    owner: str
+    weight: float
+
+
 class StrategyGenerateOut(BaseModel):
     narrative: str
     action_items: List[StrategyActionItem]
     health_score: HealthScoreOut
+    goal_cards: List[GoalMetricCard]
     data_driven: bool
     llm_enhanced: bool

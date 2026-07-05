@@ -82,10 +82,29 @@ export interface HealthScore {
   dimensions: Record<string, HealthScoreDimension>;
 }
 
+export interface GoalMetricCard {
+  id: string;
+  goal_key: string;
+  title: string;
+  aim: string;
+  metric_type: string;
+  metric_label: string;
+  target: string;
+  target_value: number;
+  direction: "up" | "down";
+  current: number | null;
+  progress: number | null;
+  status: "on_track" | "at_risk" | "behind" | "unknown";
+  section: string;
+  owner: string;
+  weight: number;
+}
+
 export interface StrategyGenerateOut {
   narrative: string;
   action_items: StrategyActionItem[];
   health_score: HealthScore;
+  goal_cards: GoalMetricCard[];
   data_driven: boolean;
   llm_enhanced: boolean;
 }
