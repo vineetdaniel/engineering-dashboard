@@ -70,9 +70,22 @@ export interface StrategyActionItem {
   due_hint?: string | null;
 }
 
+export interface HealthScoreDimension {
+  score: number;
+  label: string;
+  signals: Record<string, number | null>;
+}
+
+export interface HealthScore {
+  score: number;
+  label: string;
+  dimensions: Record<string, HealthScoreDimension>;
+}
+
 export interface StrategyGenerateOut {
   narrative: string;
   action_items: StrategyActionItem[];
+  health_score: HealthScore;
   data_driven: boolean;
   llm_enhanced: boolean;
 }
