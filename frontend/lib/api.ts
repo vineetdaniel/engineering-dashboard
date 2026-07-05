@@ -45,6 +45,58 @@ export const generateNewsletter = async () => {
   return res.arrayBuffer();
 };
 
+export interface StrategyGoals {
+  six_month: string;
+  quarterly: string;
+  weekly: string;
+  ai_strategy_focus: string;
+  top_risks: string;
+  growth_levers: string;
+  team_capacity_notes: string;
+}
+
+export interface StrategyOut {
+  goals: StrategyGoals;
+  updated_at: string | null;
+}
+
+export interface StrategyActionItem {
+  id: string;
+  title: string;
+  rationale: string;
+  section: string;
+  priority: "critical" | "high" | "medium" | "low";
+  owner?: string | null;
+  due_hint?: string | null;
+}
+
+export interface StrategyGenerateOut {
+  narrative: string;
+  action_items: StrategyActionItem[];
+  data_driven: boolean;
+  llm_enhanced: boolean;
+}
+
+export const getStrategy = (): Promise<StrategyOut> => api("/strategy");
+
+export const saveStrategy = (goals: StrategyGoals): Promise<StrategyOut> =>
+  api("/strategy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ goals }),
+  });
+
+export const generateStrategy = (filters?: ApiFilters): Promise<StrategyGenerateOut> =>
+  api("/strategy/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dateRange: filters?.dateRange || null,
+      squad: filters?.squad === "all" ? null : filters?.squad,
+      environment: filters?.environment === "all" ? null : filters?.environment,
+    }),
+  });
+
 export interface ApiFilters {
   dateRange?: "24h" | "7d" | "30d" | "90d";
   squad?: string;

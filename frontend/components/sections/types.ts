@@ -1,5 +1,15 @@
 import type { FilterState } from "@/components/GlobalFilters";
 
+export interface StrategyGoalsData {
+  six_month: string;
+  quarterly: string;
+  weekly: string;
+  ai_strategy_focus: string;
+  top_risks: string;
+  growth_levers: string;
+  team_capacity_notes: string;
+}
+
 export interface SectionProps {
   settings: any;
   health: any;
@@ -23,4 +33,6 @@ export interface SectionProps {
   lastUpdated?: Date | null;
   lastSyncResult?: { source: string; metrics: number; events: number } | null;
   healthLoading?: boolean;
+  strategyGoals?: { goals: StrategyGoalsData; updated_at: string | null } | null;
+  onStrategyRefresh?: () => void;
 }

@@ -1,0 +1,444 @@
+"""Strategy engine: derive CTO-level strategy from goals + accumulated data.
+
+The engine always produces rule-based action items. If OPENAI_API_KEY is
+configured, it also asks an LLM to write a seasoned-CTO narrative that blends
+the user's stated goals with the current data signals.
+"""
+
+import json
+import os
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from backend.config import settings
+
+
+def _pick(metrics: List[Dict[str, Any]], metric_type: str) -> Optional[Dict[str, Any]]:
+    """Return the most recent metric of the given type."""
+    matches = [m for m in metrics if m.get("metric_type") == metric_type]
+    if not matches:
+        return None
+    matches.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
+    return matches[0]
+
+
+def _sum_recent(metrics: List[Dict[str, Any]], metric_type: str) -> float:
+    return sum(float(m.get("value") or 0) for m in metrics if m.get("metric_type") == metric_type)
+
+
+def _count(events: List[Dict[str, Any]], event_type: str) -> int:
+    return len([e for e in events if e.get("event_type") == event_type])
+
+
+def _active(events: List[Dict[str, Any]], event_type: str) -> List[Dict[str, Any]]:
+    return [e for e in events if e.get("event_type") == event_type and e.get("status") != "resolved"]
+
+
+def _extract_text(goals: Dict[str, str], key: str) -> str:
+    return (goals.get(key) or "").strip()
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat()
+
+
+def _action(
+    title: str,
+    rationale: str,
+    section: str,
+    priority: str = "medium",
+    owner: Optional[str] = None,
+    due_hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "id": f"{section}-{_now_iso()}-{title}".replace(" ", "_").lower()[:64],
+        "title": title,
+        "rationale": rationale,
+        "section": section,
+        "priority": priority,
+        "owner": owner,
+        "due_hint": due_hint,
+    }
+
+
+def _derive_action_items(goals: Dict[str, str], metrics: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    actions: List[Dict[str, Any]] = []
+
+    # --- Engineering velocity / health ---
+    open_prs = int(_sum_recent(metrics, "open_prs"))
+    open_bugs = int(_sum_recent(metrics, "open_bugs"))
+    open_issues = int(_sum_recent(metrics, "open_issues"))
+    stuck_prs = _active(events, "stuck_pr")
+    blocked_tickets = _active(events, "blocked_ticket")
+
+    if stuck_prs:
+        actions.append(_action(
+            title=f"Unblock {len(stuck_prs)} stuck PR(s)",
+            rationale=f"{len(stuck_prs)} PRs are stuck; stale reviews are a leading indicator of cycle-time risk.",
+            section="engineering",
+            priority="high" if len(stuck_prs) >= 3 else "medium",
+            due_hint="this week",
+        ))
+    if blocked_tickets:
+        actions.append(_action(
+            title=f"Resolve {len(blocked_tickets)} blocked ticket(s)",
+            rationale="Blocked tickets often hide cross-team dependencies and predict sprint slippage.",
+            section="product",
+            priority="high" if len(blocked_tickets) >= 3 else "medium",
+            due_hint="this week",
+        ))
+    if open_bugs >= 20:
+        actions.append(_action(
+            title="Run a bug triage sprint",
+            rationale=f"Bug backlog is at {open_bugs}; without a focused sprint, reliability goals slip.",
+            section="engineering",
+            priority="high",
+            due_hint="next 2 weeks",
+        ))
+    if open_prs >= 25:
+        actions.append(_action(
+            title="Enforce a PR review SLA",
+            rationale=f"{open_prs} open PRs indicate review queue saturation; a 24h SLA restores flow.",
+            section="engineering",
+            priority="medium",
+            due_hint="this week",
+        ))
+
+    # --- Security ---
+    cves = [e for e in events if e.get("event_type") == "dependabot_alert"]
+    critical_cves = [e for e in cves if e.get("severity") in ("critical", "high")]
+    if critical_cves:
+        actions.append(_action(
+            title=f"Patch {len(critical_cves)} critical/high CVE(s)",
+            rationale="Critical CVEs in dependencies are board-level risk; patch or document compensating controls.",
+            section="security",
+            priority="critical",
+            due_hint="48 hours",
+        ))
+    if len(cves) >= 10 and not critical_cves:
+        actions.append(_action(
+            title="Schedule dependency hygiene week",
+            rationale=f"{len(cves)} open dependabot findings suggest drift; batch-upgrade low-risk packages.",
+            section="security",
+            priority="medium",
+            due_hint="next 2 weeks",
+        ))
+
+    # --- Operations / incidents ---
+    active_incidents = _active(events, "incident")
+    p0p1 = [e for e in active_incidents if e.get("severity") in ("critical", "high")]
+    mttr = _pick(metrics, "mttr_minutes")
+    change_failure = _pick(metrics, "change_failure_rate")
+    if p0p1:
+        actions.append(_action(
+            title=f"Close {len(p0p1)} active P0/P1 incident(s)",
+            rationale="Active critical incidents must be owned and communicated before strategy work.",
+            section="operations",
+            priority="critical",
+            due_hint="24 hours",
+        ))
+    if mttr and (mttr.get("value") or 0) > 60:
+        actions.append(_action(
+            title="Reduce MTTR below 60 minutes",
+            rationale=f"Current MTTR is {mttr['value']} min; fast recovery protects quarterly delivery commitments.",
+            section="operations",
+            priority="high",
+            due_hint="this quarter",
+        ))
+    if change_failure and (change_failure.get("value") or 0) > 15:
+        actions.append(_action(
+            title="Drive change-failure rate below 15%",
+            rationale=f"Change failure rate is {change_failure['value']}%; deploy quality gates and canaries.",
+            section="operations",
+            priority="high",
+            due_hint="this quarter",
+        ))
+
+    # --- Payments / fintech ---
+    payment_success = _pick(metrics, "payment_success_rate")
+    fraud_rate = _pick(metrics, "fraud_rate")
+    uptime = _pick(metrics, "uptime_pct")
+    if payment_success and (payment_success.get("value") or 100) < 99.5:
+        actions.append(_action(
+            title="Restore payment success rate to >99.5%",
+            rationale=f"Payment success at {payment_success['value']}% directly impacts revenue; investigate gateway/decline codes.",
+            section="payments",
+            priority="critical",
+            due_hint="48 hours",
+        ))
+    if fraud_rate and (fraud_rate.get("value") or 0) > 1.0:
+        actions.append(_action(
+            title="Tighten fraud controls",
+            rationale=f"Fraud rate {fraud_rate['value']}% is above 1%; review rules and chargeback correlation.",
+            section="payments",
+            priority="high",
+            due_hint="this week",
+        ))
+    if uptime and (uptime.get("value") or 100) < 99.9:
+        actions.append(_action(
+            title="Improve uptime toward 99.99%",
+            rationale=f"Uptime is {uptime['value']}%; reliability is a competitive feature in fintech.",
+            section="operations",
+            priority="high",
+            due_hint="this quarter",
+        ))
+
+    # --- Cost ---
+    cloud_spend = _pick(metrics, "cloud_spend_mtd")
+    budget = next((m for m in metrics if m.get("metric_type") == "monthly_budget"), None)
+    if cloud_spend and budget:
+        pct = (cloud_spend.get("value") or 0) / max(budget.get("value") or 1, 1) * 100
+        if pct > 85:
+            actions.append(_action(
+                title="Review cloud cost drivers and forecast",
+                rationale=f"MTD cloud spend is {pct:.0f}% of budget; identify top drivers before month-end.",
+                section="cost",
+                priority="high" if pct >= 100 else "medium",
+                due_hint="this week",
+            ))
+
+    # --- Compliance ---
+    failed_controls = [e for e in events if e.get("event_type") == "compliance_finding"]
+    if failed_controls:
+        actions.append(_action(
+            title=f"Remediate {len(failed_controls)} failed compliance control(s)",
+            rationale="Compliance findings block audit readiness and can delay go-to-market.",
+            section="compliance",
+            priority="high",
+            due_hint="this week",
+        ))
+
+    # --- AI strategy (explicit goal) ---
+    ai_focus = _extract_text(goals, "ai_strategy_focus")
+    if ai_focus:
+        actions.append(_action(
+            title="Draft AI strategy one-pager",
+            rationale=f"You flagged AI focus: {ai_focus[:80]}{'...' if len(ai_focus) > 80 else ''}. Define 3 bets, ROI, and risk guardrails.",
+            section="strategy",
+            priority="high",
+            due_hint="this week",
+        ))
+        actions.append(_action(
+            title="Inventory AI-readiness of data pipelines",
+            rationale="AI/ML outcomes depend on clean, observable data; audit lineage and freshness.",
+            section="engineering",
+            priority="medium",
+            due_hint="next 2 weeks",
+        ))
+
+    # --- Capacity / team ---
+    team_notes = _extract_text(goals, "team_capacity_notes")
+    if team_notes and any(kw in team_notes.lower() for kw in ("hiring", "open", "vacancy", "short")):
+        actions.append(_action(
+            title="Refresh hiring plan against quarterly goals",
+            rationale="Team capacity constraints are mentioned in strategy notes; align reqs to quarterly outcomes.",
+            section="team",
+            priority="medium",
+            due_hint="this week",
+        ))
+
+    # --- Top risks ---
+    risks = _extract_text(goals, "top_risks")
+    if risks:
+        actions.append(_action(
+            title="Socialize risk register with leadership",
+            rationale="Identified risks need executive visibility and owners to become manageable.",
+            section="strategy",
+            priority="medium",
+            due_hint="this week",
+        ))
+
+    # --- Growth levers ---
+    growth = _extract_text(goals, "growth_levers")
+    if growth:
+        actions.append(_action(
+            title="Map growth levers to metrics and owners",
+            rationale="Growth initiatives succeed when each lever has a metric, owner, and weekly checkpoint.",
+            section="strategy",
+            priority="medium",
+            due_hint="this week",
+        ))
+
+    # --- Generic quarterly anchor if light ---
+    if len(actions) < 3:
+        actions.append(_action(
+            title="Set weekly strategy checkpoint",
+            rationale="Strategy without a regular cadence drifts. Block 30 min each week to review these action items against live data.",
+            section="strategy",
+            priority="medium",
+            due_hint="recurring",
+        ))
+
+    return sorted(actions, key=lambda a: ({"critical": 0, "high": 1, "medium": 2, "low": 3}.get(a["priority"], 2), a["title"]))
+
+
+def _default_narrative(goals: Dict[str, str], metrics: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    six_month = _extract_text(goals, "six_month")
+    quarterly = _extract_text(goals, "quarterly")
+    weekly = _extract_text(goals, "weekly")
+
+    if six_month:
+        lines.append(f"**6-month aim:** {six_month}")
+    if quarterly:
+        lines.append(f"**Quarterly focus:** {quarterly}")
+    if weekly:
+        lines.append(f"**This week:** {weekly}")
+
+    active_incidents = len(_active(events, "incident"))
+    critical_cves = len([e for e in events if e.get("event_type") == "dependabot_alert" and e.get("severity") in ("critical", "high")])
+    open_prs = int(_sum_recent(metrics, "open_prs"))
+    open_bugs = int(_sum_recent(metrics, "open_bugs"))
+    payment_success = _pick(metrics, "payment_success_rate")
+    uptime = _pick(metrics, "uptime_pct")
+
+    data_points = []
+    if active_incidents:
+        data_points.append(f"{active_incidents} active incident(s)")
+    if critical_cves:
+        data_points.append(f"{critical_cves} critical/high CVE(s)")
+    if open_prs:
+        data_points.append(f"{open_prs} open PR(s)")
+    if open_bugs:
+        data_points.append(f"{open_bugs} open bug(s)")
+    if payment_success:
+        data_points.append(f"{payment_success.get('value')}% payment success")
+    if uptime:
+        data_points.append(f"{uptime.get('value')}% uptime")
+
+    if data_points:
+        lines.append(f"**Current signals:** {', '.join(data_points)}.")
+
+    ai_focus = _extract_text(goals, "ai_strategy_focus")
+    if ai_focus:
+        lines.append(
+            f"**AI lens:** Your AI focus is '{ai_focus}'. Prioritize use cases with the shortest path to measurable ROI, "
+            "and ring-fence experimental work behind clear guardrails (data privacy, hallucination risk, cost per inference)."
+        )
+
+    lines.append(
+        "**CTO take:** Start by stabilizing anything that threatens this quarter's commitments — incidents, critical CVEs, "
+        "and payment reliability. Once the floor is solid, shift energy to the quarterly bets that unlock the 6-month aim. "
+        "Review this strategy weekly against the live dashboard so it stays data-informed, not document-driven."
+    )
+    return "\n\n".join(lines)
+
+
+def _build_strategy_prompt(goals: Dict[str, str], metrics: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> str:
+    payment_success_metric = _pick(metrics, "payment_success_rate")
+    uptime_metric = _pick(metrics, "uptime_pct")
+    fraud_metric = _pick(metrics, "fraud_rate")
+    mttr_metric = _pick(metrics, "mttr_minutes")
+    cfr_metric = _pick(metrics, "change_failure_rate")
+
+    data_summary = {
+        "active_incidents": len(_active(events, "incident")),
+        "critical_cves": len([e for e in events if e.get("event_type") == "dependabot_alert" and e.get("severity") in ("critical", "high")]),
+        "open_prs": int(_sum_recent(metrics, "open_prs")),
+        "open_bugs": int(_sum_recent(metrics, "open_bugs")),
+        "open_issues": int(_sum_recent(metrics, "open_issues")),
+        "payment_success_rate": payment_success_metric.get("value") if payment_success_metric else None,
+        "uptime_pct": uptime_metric.get("value") if uptime_metric else None,
+        "fraud_rate": fraud_metric.get("value") if fraud_metric else None,
+        "mttr_minutes": mttr_metric.get("value") if mttr_metric else None,
+        "change_failure_rate": cfr_metric.get("value") if cfr_metric else None,
+    }
+
+    return f"""You are a seasoned CTO advising a fintech engineering organization.
+The leadership team has defined the following strategic aims:
+
+6-month aim: {_extract_text(goals, 'six_month') or 'Not specified'}
+Quarterly aim: {_extract_text(goals, 'quarterly') or 'Not specified'}
+Weekly aim: {_extract_text(goals, 'weekly') or 'Not specified'}
+AI strategy focus: {_extract_text(goals, 'ai_strategy_focus') or 'Not specified'}
+Top risks: {_extract_text(goals, 'top_risks') or 'Not specified'}
+Growth levers: {_extract_text(goals, 'growth_levers') or 'Not specified'}
+Team capacity notes: {_extract_text(goals, 'team_capacity_notes') or 'Not specified'}
+
+Current engineering/ops data snapshot: {json.dumps(data_summary)}
+
+Write a concise CTO strategy narrative (3-5 paragraphs). Include:
+1. A one-sentence framing of the biggest opportunity and risk.
+2. What to do in the next 7 days, next 30 days, and this quarter.
+3. Specific guidance on the AI strategy focus.
+4. A closing principle or guardrail.
+Keep it practical and slightly direct, as if from a CTO in a weekly exec standup.
+"""
+
+
+def _openai_narrative(prompt: str) -> str:
+    api_key = settings.OPENAI_API_KEY
+    if not api_key:
+        return ""
+    try:
+        import openai  # type: ignore
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a concise, experienced CTO writing strategy guidance."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.5,
+            max_tokens=900,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return ""
+
+
+def _claude_narrative(prompt: str) -> str:
+    api_key = settings.ANTHROPIC_API_KEY
+    if not api_key:
+        return ""
+    try:
+        import anthropic  # type: ignore
+        client = anthropic.Anthropic(api_key=api_key)
+        kwargs: Dict[str, Any] = {
+            "model": settings.CLAUDE_MODEL,
+            "max_tokens": 900,
+            "system": "You are a concise, experienced CTO writing strategy guidance.",
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        # Newer Claude models (e.g. claude-sonnet-5) do not accept temperature.
+        if "claude-3" in settings.CLAUDE_MODEL:
+            kwargs["temperature"] = 0.5
+        response = client.messages.create(**kwargs)
+        for block in response.content:
+            if block.type == "text":
+                return block.text.strip()
+            if block.type == "thinking":
+                # Fable returns its reasoning in a thinking block; ignore it.
+                continue
+        return ""
+    except Exception:
+        return ""
+
+
+def _llm_narrative(goals: Dict[str, str], metrics: List[Dict[str, Any]], events: List[Dict[str, Any]]) -> str:
+    prompt = _build_strategy_prompt(goals, metrics, events)
+    # Prefer Claude if configured, otherwise try OpenAI.
+    return _claude_narrative(prompt) or _openai_narrative(prompt)
+
+
+def build_strategy(
+    goals: Dict[str, str],
+    metrics: List[Dict[str, Any]],
+    events: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Return strategy action items and a CTO narrative.
+
+    If OPENAI_API_KEY is set, the narrative is LLM-enhanced; otherwise a
+    rule-based narrative is returned. Action items are always rule-based so
+    they are deterministic and auditable.
+    """
+    action_items = _derive_action_items(goals, metrics, events)
+    llm_text = _llm_narrative(goals, metrics, events)
+    llm_enhanced = bool(llm_text)
+    narrative = llm_text or _default_narrative(goals, metrics, events)
+    return {
+        "narrative": narrative,
+        "action_items": action_items,
+        "data_driven": True,
+        "llm_enhanced": llm_enhanced,
+    }

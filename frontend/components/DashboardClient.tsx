@@ -4,7 +4,7 @@ import { useMemo, useState, useEffect, Suspense, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { DashboardShell } from "@/components/DashboardShell";
-import { getConnectorHealth, syncSource, getMetrics, getEvents } from "@/lib/api";
+import { getConnectorHealth, syncSource, getMetrics, getEvents, getStrategy } from "@/lib/api";
 import { type FilterState } from "@/components/GlobalFilters";
 import { SkeletonGrid } from "@/components/widgets/SkeletonGrid";
 import { WidgetErrorBoundary } from "@/components/WidgetErrorBoundary";
@@ -51,6 +51,9 @@ const ComplianceSection = dynamic(() => import("@/components/sections/Compliance
 const ReportsSection = dynamic(() => import("@/components/sections/ReportsSection").then((m) => m.ReportsSection), {
   loading: () => <SectionLoader />,
 });
+const StrategySection = dynamic(() => import("@/components/sections/StrategySection").then((m) => m.StrategySection), {
+  loading: () => <SectionLoader />,
+});
 
 interface DashboardClientProps {
   settings: any;
@@ -69,6 +72,7 @@ const VALID_SECTIONS = new Set([
   "compliance",
   "cost",
   "reports",
+  "strategy",
   "team",
   "settings",
 ]);
@@ -112,6 +116,7 @@ export function DashboardClient({
   }, [urlSection, active]);
   const [metrics, setMetrics] = useState(initialMetrics);
   const [events, setEvents] = useState(initialEvents);
+  const [strategyGoals, setStrategyGoals] = useState<any>(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -191,6 +196,15 @@ export function DashboardClient({
     }
   }
 
+  async function refreshStrategy() {
+    try {
+      const s = await getStrategy();
+      setStrategyGoals(s);
+    } catch (err) {
+      console.error("Strategy load failed", err);
+    }
+  }
+
   async function handleSync(source: string) {
     setError(null);
     setLoading(source);
@@ -212,6 +226,7 @@ export function DashboardClient({
 
   useEffect(() => {
     refreshHealth();
+    refreshStrategy();
   }, []);
 
   useEffect(() => {
@@ -259,6 +274,8 @@ export function DashboardClient({
     lastSyncResult,
     dataSource,
     healthLoading,
+    strategyGoals,
+    onStrategyRefresh: refreshStrategy,
   };
 
   return (
@@ -355,6 +372,13 @@ export function DashboardClient({
         <Suspense fallback={<SectionLoader />}>
           <WidgetErrorBoundary>
             <ReportsSection {...sectionProps} />
+          </WidgetErrorBoundary>
+        </Suspense>
+      )}
+      {active === "strategy" && (
+        <Suspense fallback={<SectionLoader />}>
+          <WidgetErrorBoundary>
+            <StrategySection {...sectionProps} />
           </WidgetErrorBoundary>
         </Suspense>
       )}

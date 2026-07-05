@@ -20,6 +20,7 @@ from backend.api.reports import generate_newsletter_pdf
 from backend.config import settings
 from backend.config_store import get_connector_config, list_connector_configs, mask_secrets, set_connector_config
 from backend.db.models import init_db, get_db, Metric, Event, ConnectorConfig
+from backend.strategy.engine import build_strategy
 from backend.db.seed import seed_if_empty
 from backend.mcp.integrations import CONNECTORS
 
@@ -82,6 +83,8 @@ def _cors_origins() -> list[str]:
             "http://127.0.0.1:3000",
             "http://localhost:3001",
             "http://127.0.0.1:3001",
+            "http://localhost:3002",
+            "http://127.0.0.1:3002",
         ]
     return []
 
@@ -166,6 +169,94 @@ async def app_settings(db: Session = Depends(get_db)):
         "github_org": settings.GITHUB_ORG,
         "connectors": list_connector_configs(db),
     }
+
+
+def _get_strategy_config(db: Session) -> schemas.StrategyOut:
+    """Load persisted strategy goals from the strategy ConnectorConfig row."""
+    row = db.query(ConnectorConfig).filter(ConnectorConfig.name == "strategy").first()
+    if row and row.config:
+        goals = row.config.get("goals", {})
+        return schemas.StrategyOut(
+            goals=schemas.StrategyGoals(
+                six_month=goals.get("six_month", ""),
+                quarterly=goals.get("quarterly", ""),
+                weekly=goals.get("weekly", ""),
+                ai_strategy_focus=goals.get("ai_strategy_focus", ""),
+                top_risks=goals.get("top_risks", ""),
+                growth_levers=goals.get("growth_levers", ""),
+                team_capacity_notes=goals.get("team_capacity_notes", ""),
+            ),
+            updated_at=row.updated_at,
+        )
+    return schemas.StrategyOut(
+        goals=schemas.StrategyGoals(
+            six_month="",
+            quarterly="",
+            weekly="",
+            ai_strategy_focus="",
+            top_risks="",
+            growth_levers="",
+            team_capacity_notes="",
+        ),
+        updated_at=None,
+    )
+
+
+@app.get("/strategy", response_model=schemas.StrategyOut)
+async def get_strategy(db: Session = Depends(get_db)):
+    return _get_strategy_config(db)
+
+
+@app.post("/strategy", response_model=schemas.StrategyOut)
+async def save_strategy(payload: schemas.StrategySaveIn, db: Session = Depends(get_db)):
+    row = db.query(ConnectorConfig).filter(ConnectorConfig.name == "strategy").first()
+    if row is None:
+        row = ConnectorConfig(name="strategy", config={"goals": payload.goals.model_dump()})
+        db.add(row)
+    else:
+        row.config = {"goals": payload.goals.model_dump()}
+    db.commit()
+    db.refresh(row)
+    return _get_strategy_config(db)
+
+
+@app.post("/strategy/generate", response_model=schemas.StrategyGenerateOut)
+async def generate_strategy(
+    filters: schemas.ApiFilters | None = None,
+    db: Session = Depends(get_db),
+):
+    """Generate a CTO strategy narrative and action items from goals + live data.
+
+    Accepts the same dateRange/squad/environment filters used elsewhere so the
+    generated strategy reflects the currently selected data slice.
+    """
+    strategy = _get_strategy_config(db)
+
+    # Build data slice matching existing metric/event filters.
+    q_metrics = db.query(Metric)
+    q_events = db.query(Event)
+    if filters and filters.dateRange:
+        window = parse_window(filters.dateRange)
+        if window:
+            q_metrics = q_metrics.filter(Metric.timestamp >= window)
+            q_events = q_events.filter(Event.happened_at >= window)
+    if filters and filters.squad and filters.squad != "all":
+        squad_filter = (Metric.entity.ilike(f"%{filters.squad}%")) | (
+            Metric.meta.cast(JSONB).op("@>")({"squad": filters.squad})
+        )
+        q_metrics = q_metrics.filter(squad_filter)
+    if filters and filters.environment and filters.environment != "all":
+        q_metrics = q_metrics.filter(Metric.meta.cast(JSONB).op("@>")({"environment": filters.environment}))
+
+    metrics = q_metrics.all()
+    events = q_events.all()
+
+    result = build_strategy(
+        goals=strategy.goals.model_dump(),
+        metrics=[schemas.MetricOut.model_validate(m).model_dump() for m in metrics],
+        events=[schemas.EventOut.model_validate(e).model_dump() for e in events],
+    )
+    return schemas.StrategyGenerateOut(**result)
 
 
 @app.get("/connectors/health", response_model=schemas.ConnectorHealthResponse)

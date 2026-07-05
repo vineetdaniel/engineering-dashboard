@@ -16,6 +16,7 @@ import {
   FileCheck,
   FileText,
   CalendarRange,
+  Compass,
 } from "lucide-react";
 import Link from "next/link";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -32,6 +33,7 @@ export const navSections = [
   { label: "Compliance", icon: FileCheck, value: "compliance" },
   { label: "Cost", icon: Wallet, value: "cost" },
   { label: "Reports", icon: FileText, value: "reports" },
+  { label: "Strategy", icon: Compass, value: "strategy" },
   { label: "Planning", icon: CalendarRange, value: "planning", href: "/sprints" },
   { label: "Team", icon: Users, value: "team" },
   { label: "Settings", icon: Settings, value: "settings" },

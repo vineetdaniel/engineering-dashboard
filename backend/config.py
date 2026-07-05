@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = ""  # comma-separated list of frontend origins
     DATABASE_REQUIRE_SSL: bool = False  # set True in production when DB enforces SSL
 
+    # Optional LLM providers for strategy narrative
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    ANTHROPIC_API_KEY: str = ""
+    CLAUDE_MODEL: str = "claude-fable-5"
+
     class Config:
         env_file = ".env"
         case_sensitive = False
